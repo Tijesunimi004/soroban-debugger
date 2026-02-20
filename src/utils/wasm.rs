@@ -198,9 +198,7 @@ pub fn extract_contract_metadata(wasm_bytes: &[u8]) -> Result<ContractMetadata> 
             };
 
             match key {
-                "contract_version" | "contractVersion"
-                    if metadata.contract_version.is_none() =>
-                {
+                "contract_version" | "contractVersion" if metadata.contract_version.is_none() => {
                     metadata.contract_version = Some(value.to_string());
                 }
                 "sdk_version" | "sdkVersion" if metadata.sdk_version.is_none() => {
@@ -353,8 +351,7 @@ implementation_notes=Line-based format
     #[test]
     fn extract_metadata_ignores_unrelated_custom_sections() {
         // A custom section with a different name should not affect the result.
-        let wasm =
-            make_custom_section_wasm("some_other_section", b"irrelevant data");
+        let wasm = make_custom_section_wasm("some_other_section", b"irrelevant data");
         let meta = extract_contract_metadata(&wasm).expect("parsing should succeed");
         assert!(meta.is_empty());
     }
