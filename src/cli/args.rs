@@ -79,6 +79,9 @@ pub enum Commands {
 
     /// Compare two execution trace JSON files side-by-side
     Compare(CompareArgs),
+
+    /// List exported functions of a contract (shorthand for `inspect --functions`)
+    ListFunctions(ListFunctionsArgs),
 }
 
 #[derive(Parser)]
@@ -222,6 +225,15 @@ pub struct InspectArgs {
     /// Show contract metadata
     #[arg(long)]
     pub metadata: bool,
+}
+
+/// Args for the `list-functions` shorthand command.
+/// Delegates to `inspect --functions` under the hood.
+#[derive(Parser)]
+pub struct ListFunctionsArgs {
+    /// Path to the contract WASM file
+    #[arg(short, long)]
+    pub contract: PathBuf,
 }
 
 #[derive(Parser)]
