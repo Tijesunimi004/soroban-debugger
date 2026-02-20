@@ -32,7 +32,7 @@ impl DebuggerEngine {
     }
 
     /// Execute a contract function with debugging
-    pub fn execute(&mut self, function: &str, args: Option<&str>) -> Result<String> {
+    pub fn execute(&mut self, function: &str, args: Option<&str>) -> Result<crate::runtime::executor::ExecutionResult> {
         info!("Executing function: {}", function);
 
         // Check if we should break at function entry

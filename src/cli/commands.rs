@@ -49,10 +49,19 @@ pub fn run(args: RunArgs) -> Result<()> {
 
     // Execute with debugging
     println!("\n--- Execution Start ---\n");
-    let result = engine.execute(&args.function, parsed_args.as_deref())?;
+    let execution_result = engine.execute(&args.function, parsed_args.as_deref())?;
     println!("\n--- Execution Complete ---\n");
 
-    println!("Result: {:?}", result);
+    if args.json {
+        let json_output = serde_json::json!({
+            "result": execution_result.result,
+            "execution_time_ms": execution_result.execution_time_ms,
+        });
+        println!("{}", serde_json::to_string_pretty(&json_output)?);
+    } else {
+        println!("Result: {}", execution_result.result);
+        println!("Execution Time: {:.2}ms", execution_result.execution_time_ms);
+    }
 
     Ok(())
 }
