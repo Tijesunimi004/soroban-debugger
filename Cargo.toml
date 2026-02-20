@@ -45,6 +45,7 @@ itertools = "0.12"
 assert_cmd = "2.0"
 predicates = "3.0"
 tempfile = "3.8"
+proptest = "1.0"
 
 [profile.release]
 opt-level = 3
