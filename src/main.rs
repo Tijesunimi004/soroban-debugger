@@ -74,6 +74,7 @@ fn main() -> Result<()> {
         }
         Commands::Profile(args) => {
             soroban_debugger::cli::commands::profile(args)?;
+            Ok(())
         }
     };
 

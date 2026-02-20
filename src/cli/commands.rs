@@ -1,6 +1,6 @@
-use crate::cli::args::{InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs, RunArgs};
 use crate::cli::args::{
-    CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, RunArgs, UpgradeCheckArgs, Verbosity,
+    CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs, RunArgs,
+    UpgradeCheckArgs, Verbosity,
 };
 use crate::debugger::engine::DebuggerEngine;
 use crate::debugger::instruction_pointer::StepMode;
@@ -384,7 +384,6 @@ pub fn inspect(args: InspectArgs, _verbosity: Verbosity) -> Result<()> {
     Ok(())
 }
 
-
 /// Parse JSON arguments with validation.
 pub fn parse_args(json: &str) -> Result<String> {
     let value = serde_json::from_str::<serde_json::Value>(json)
@@ -726,21 +725,6 @@ fn run_instruction_stepping(
     Ok(())
 }
 
-/// Parse JSON arguments into a string for now (will be improved later)
-fn parse_args(json: &str) -> Result<String> {
-    // Basic validation
-    serde_json::from_str::<serde_json::Value>(json)
-        .with_context(|| format!("Invalid JSON arguments: {}", json))?;
-    Ok(json.to_string())
-}
-
-/// Parse JSON storage into a string for now (will be improved later)
-fn parse_storage(json: &str) -> Result<String> {
-    // Basic validation
-    serde_json::from_str::<serde_json::Value>(json)
-        .with_context(|| format!("Invalid JSON storage: {}", json))?;
-    Ok(json.to_string())
-}
 fn display_instruction_context(engine: &DebuggerEngine, context_size: usize) {
     let context = engine.get_instruction_context(context_size);
     let formatted = Formatter::format_instruction_context(&context, context_size);
