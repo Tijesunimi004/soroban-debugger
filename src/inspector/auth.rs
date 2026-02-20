@@ -1,6 +1,9 @@
 use crate::Result;
 use serde::{Deserialize, Serialize};
-use soroban_sdk::{testutils::{AuthorizedFunction, AuthorizedInvocation}, Env};
+use soroban_sdk::{
+    testutils::{AuthorizedFunction, AuthorizedInvocation},
+    Env,
+};
 
 /// Represents a node in the authorization tree
 #[derive(Debug, Clone, Serialize, Deserialize)]

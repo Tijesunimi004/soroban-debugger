@@ -1,7 +1,10 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
-use soroban_sdk::{testutils::{Address as _, AuthorizedFunction, AuthorizedInvocation}, Address, Env, Symbol, Vec as SorobanVec, Val};
 use soroban_debugger::inspector::auth::{AuthInspector, AuthNode};
+use soroban_sdk::{
+    testutils::{Address as _, AuthorizedFunction, AuthorizedInvocation},
+    Address, Env, Symbol, Val, Vec as SorobanVec,
+};
 
 #[test]
 fn test_run_command_auth_flags() {
@@ -18,13 +21,11 @@ fn test_auth_node_serialization() {
     let node = AuthNode {
         function: "transfer".to_string(),
         contract_id: "C123".to_string(),
-        sub_invocations: vec![
-            AuthNode {
-                function: "inner".to_string(),
-                contract_id: "C456".to_string(),
-                sub_invocations: vec![],
-            }
-        ],
+        sub_invocations: vec![AuthNode {
+            function: "inner".to_string(),
+            contract_id: "C456".to_string(),
+            sub_invocations: vec![],
+        }],
     };
 
     let nodes = vec![node];
