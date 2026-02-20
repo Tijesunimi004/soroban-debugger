@@ -1,4 +1,6 @@
-use crate::cli::args::{InspectArgs, InteractiveArgs, OptimizeArgs, RunArgs, UpgradeCheckArgs};
+use crate::cli::args::{
+    InspectArgs, InteractiveArgs, OptimizeArgs, RunArgs, UpgradeCheckArgs, Verbosity,
+};
 use crate::debugger::engine::DebuggerEngine;
 use crate::repeat::RepeatRunner;
 use crate::runtime::executor::ContractExecutor;
@@ -10,7 +12,7 @@ use std::fs;
 use tracing::info as log_info;
 
 /// Execute the run command
-pub fn run(args: RunArgs) -> Result<()> {
+pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
     println!("Loading contract: {:?}", args.contract);
 
     // Load WASM file
@@ -123,7 +125,7 @@ pub fn run(args: RunArgs) -> Result<()> {
 }
 
 /// Execute the interactive command
-pub fn interactive(args: InteractiveArgs) -> Result<()> {
+pub fn interactive(args: InteractiveArgs, _verbosity: Verbosity) -> Result<()> {
     println!("Starting interactive debugger for: {:?}", args.contract);
 
     // Load WASM file
@@ -157,7 +159,7 @@ pub fn interactive(args: InteractiveArgs) -> Result<()> {
 }
 
 /// Execute the inspect command
-pub fn inspect(args: InspectArgs) -> Result<()> {
+pub fn inspect(args: InspectArgs, _verbosity: Verbosity) -> Result<()> {
     println!("Inspecting contract: {:?}", args.contract);
 
     // Load WASM file
@@ -214,7 +216,7 @@ pub fn parse_storage(json: &str) -> Result<String> {
 }
 
 /// Execute the optimize command
-pub fn optimize(args: OptimizeArgs) -> Result<()> {
+pub fn optimize(args: OptimizeArgs, _verbosity: Verbosity) -> Result<()> {
     println!(
         "Analyzing contract for gas optimization: {:?}",
         args.contract
@@ -286,7 +288,7 @@ pub fn optimize(args: OptimizeArgs) -> Result<()> {
 }
 
 /// Execute the upgrade-check command
-pub fn upgrade_check(args: UpgradeCheckArgs) -> Result<()> {
+pub fn upgrade_check(args: UpgradeCheckArgs, _verbosity: Verbosity) -> Result<()> {
     println!("Comparing contracts...");
     println!("  Old: {:?}", args.old);
     println!("  New: {:?}", args.new);
