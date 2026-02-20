@@ -62,6 +62,8 @@ pub enum Commands {
     /// Inspect contract information without executing
     Inspect(InspectArgs),
 
+    /// Generate shell completion scripts
+    Completions(CompletionsArgs),
     /// Analyze contract and generate gas optimization suggestions
     Optimize(OptimizeArgs),
 

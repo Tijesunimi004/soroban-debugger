@@ -129,6 +129,38 @@ Options:
   -c, --contract <FILE>     Path to the contract WASM file
 ```
 
+### Completions Command
+
+Generate shell completion scripts for your favorite shell:
+
+```bash
+soroban-debug completions bash > /usr/local/etc/bash_completion.d/soroban-debug
+```
+
+Supported shells: `bash`, `zsh`, `fish`, `powershell`.
+
+#### Installation Instructions
+
+**Bash:**
+```bash
+soroban-debug completions bash > /usr/local/etc/bash_completion.d/soroban-debug
+```
+
+**Zsh:**
+```bash
+soroban-debug completions zsh > /usr/local/share/zsh/site-functions/_soroban-debug
+```
+
+**Fish:**
+```bash
+soroban-debug completions fish > ~/.config/fish/completions/soroban-debug.fish
+```
+
+**PowerShell:**
+```powershell
+soroban-debug completions powershell >> $PROFILE
+```
+
 ### Compare Command
 
 Compare two execution trace JSON files side-by-side to identify
