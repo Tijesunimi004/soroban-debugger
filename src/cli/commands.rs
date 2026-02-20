@@ -107,6 +107,18 @@ pub fn run(args: RunArgs) -> Result<()> {
         inspector.display_filtered(&storage_filter);
     }
 
+    // Display auth tree if requested
+    if args.show_auth {
+        let auth_tree = engine.executor().get_auth_tree()?;
+        if args.json {
+            let json_output = crate::inspector::auth::AuthInspector::to_json(&auth_tree)?;
+            println!("{}", json_output);
+        } else {
+            println!("\n--- Authorizations ---");
+            crate::inspector::auth::AuthInspector::display(&auth_tree);
+        }
+    }
+
     Ok(())
 }
 
