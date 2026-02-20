@@ -265,17 +265,13 @@ impl CompareEngine {
     pub fn render_report(report: &ComparisonReport) -> String {
         let mut out = String::new();
 
-        out.push_str(&format!(
-            "═══════════════════════════════════════════════════════════════\n"
-        ));
-        out.push_str(&format!("  Execution Trace Comparison\n"));
+        out.push_str("═══════════════════════════════════════════════════════════════\n");
+        out.push_str("  Execution Trace Comparison\n");
         out.push_str(&format!(
             "  A: {}\n  B: {}\n",
             report.label_a, report.label_b
         ));
-        out.push_str(&format!(
-            "═══════════════════════════════════════════════════════════════\n\n"
-        ));
+        out.push_str("═══════════════════════════════════════════════════════════════\n\n");
 
         // ── Storage ────────────────────────────────────────────────
         out.push_str("───────────────── Storage Changes ─────────────────\n\n");
@@ -447,9 +443,7 @@ impl CompareEngine {
             }
         }
 
-        out.push_str(&format!(
-            "\n═══════════════════════════════════════════════════════════════\n"
-        ));
+        out.push_str("\n═══════════════════════════════════════════════════════════════\n");
 
         out
     }

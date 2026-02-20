@@ -167,8 +167,6 @@ impl StorageInspector {
 
     /// Capture a snapshot of all storage entries from the host
     pub fn capture_snapshot(_host: &Host) -> HashMap<String, String> {
-        let snapshot = HashMap::new();
-
         // In a real implementation, we would iterate through host.get_ledger_entries()
         // or track changes via a custom Storage instance.
         // For this debugger, we'll try to extract what's available.
@@ -179,7 +177,7 @@ impl StorageInspector {
         // NOTE: In Soroban host, entries are typically accessed by key.
         // To show "everything", we'd need to have tracked access during execution.
 
-        snapshot
+        HashMap::new()
     }
 
     /// Compute the difference between two storage snapshots

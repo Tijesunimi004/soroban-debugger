@@ -75,6 +75,9 @@ impl InstructionPointer {
         self.step_mode = mode;
 
         match mode {
+            StepMode::StepOver => {
+                self.target_depth = Some(self.call_stack_depth);
+            }
             StepMode::StepOut => {
                 self.target_depth = if self.call_stack_depth > 0 {
                     Some(self.call_stack_depth - 1)
@@ -119,10 +122,10 @@ impl InstructionPointer {
     pub fn update_call_stack(&mut self, instruction: &Instruction) {
         if instruction.is_call() {
             self.call_stack_depth += 1;
-        } else if matches!(instruction.operator, wasmparser::Operator::Return) {
-            if self.call_stack_depth > 0 {
-                self.call_stack_depth -= 1;
-            }
+        } else if matches!(instruction.operator, wasmparser::Operator::Return)
+            && self.call_stack_depth > 0
+        {
+            self.call_stack_depth -= 1;
         }
     }
 
@@ -136,7 +139,9 @@ impl InstructionPointer {
             StepMode::StepInto => true,
             StepMode::StepOver => {
                 // Pause if we're at the same depth or returned from a call
-                self.call_stack_depth <= self.call_stack_depth
+                self.target_depth
+                    .map(|target| self.call_stack_depth <= target)
+                    .unwrap_or(true)
             }
             StepMode::StepOut => {
                 // Pause if we've returned to target depth
