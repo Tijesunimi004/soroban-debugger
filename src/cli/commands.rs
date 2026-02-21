@@ -147,11 +147,19 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
         None
     };
 
-    let initial_storage = if let Some(storage_json) = &args.storage {
+    let mut initial_storage = if let Some(storage_json) = &args.storage {
         Some(parse_storage(storage_json)?)
     } else {
         None
     };
+
+    // Import storage if specified
+    if let Some(import_path) = &args.import_storage {
+        print_info(format!("Importing storage from: {:?}", import_path));
+        let imported = crate::inspector::storage::StorageState::import_from_file(import_path)?;
+        print_success(format!("Imported {} storage entries", imported.len()));
+        initial_storage = Some(serde_json::to_string(&imported)?);
+    }
 
     if let Some(n) = args.repeat {
         logging::log_repeat_execution(&args.function, n as usize);
@@ -240,6 +248,16 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
     print_success(format!("Result: {:?}", result));
     logging::log_execution_complete(&result);
 
+    // Export storage if specified
+    if let Some(export_path) = &args.export_storage {
+        print_info(format!("Exporting storage to: {:?}", export_path));
+        let storage_snapshot = engine.executor().get_storage_snapshot()?;
+        crate::inspector::storage::StorageState::export_to_file(&storage_snapshot, export_path)?;
+        print_success(format!(
+            "Exported {} storage entries",
+            storage_snapshot.len()
+        ));
+    }
     let memory_summary = memory_tracker.finalize(engine.executor().host());
     memory_summary.display();
 

@@ -1,7 +1,11 @@
+use anyhow::{Context, Result};
 use crossterm::style::{Color, Stylize};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use soroban_env_host::Host;
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 
 /// Represents a storage key filter pattern
 #[derive(Debug, Clone)]
@@ -12,6 +16,36 @@ pub enum FilterPattern {
     Regex(Regex),
     /// Exact match: `balance` matches the key exactly
     Exact(String),
+}
+
+/// Storage state snapshot for import/export
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StorageState {
+    pub entries: HashMap<String, String>,
+}
+
+impl StorageState {
+    /// Export storage state to JSON file
+    pub fn export_to_file<P: AsRef<Path>>(
+        entries: &HashMap<String, String>,
+        path: P,
+    ) -> Result<()> {
+        let state = StorageState {
+            entries: entries.clone(),
+        };
+        let json =
+            serde_json::to_string_pretty(&state).context("Failed to serialize storage state")?;
+        fs::write(path.as_ref(), json).context("Failed to write storage file")?;
+        Ok(())
+    }
+
+    /// Import storage state from JSON file
+    pub fn import_from_file<P: AsRef<Path>>(path: P) -> Result<HashMap<String, String>> {
+        let contents = fs::read_to_string(path.as_ref()).context("Failed to read storage file")?;
+        let state: StorageState =
+            serde_json::from_str(&contents).context("Failed to parse storage JSON")?;
+        Ok(state.entries)
+    }
 }
 
 impl FilterPattern {
@@ -606,6 +640,51 @@ mod tests {
         assert!(diff.deleted.contains(&"deleted".to_string()));
     }
 
+    // ── StorageState import/export tests ─────────────────────────────
+
+    #[test]
+    fn test_storage_export_import() {
+        use tempfile::NamedTempFile;
+
+        let mut entries = HashMap::new();
+        entries.insert("key1".to_string(), "value1".to_string());
+        entries.insert("key2".to_string(), "value2".to_string());
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+
+        StorageState::export_to_file(&entries, path).unwrap();
+        let imported = StorageState::import_from_file(path).unwrap();
+
+        assert_eq!(imported.len(), 2);
+        assert_eq!(imported.get("key1"), Some(&"value1".to_string()));
+        assert_eq!(imported.get("key2"), Some(&"value2".to_string()));
+    }
+
+    #[test]
+    fn test_storage_export_empty() {
+        use tempfile::NamedTempFile;
+
+        let entries = HashMap::new();
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+
+        StorageState::export_to_file(&entries, path).unwrap();
+        let imported = StorageState::import_from_file(path).unwrap();
+
+        assert_eq!(imported.len(), 0);
+    }
+
+    #[test]
+    fn test_storage_import_invalid_json() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "invalid json").unwrap();
+
+        let result = StorageState::import_from_file(temp_file.path());
+        assert!(result.is_err());
     // ── Storage Access Pattern Analyzer tests ────────────────────────
 
     #[test]
