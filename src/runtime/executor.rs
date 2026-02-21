@@ -3,11 +3,9 @@ use crate::{DebuggerError, Result};
 
 use anyhow::anyhow;
 use serde_json::Value;
-use soroban_env_host::Host;
-use soroban_sdk::{Address, Env, InvokeError, Symbol, Val, Vec as SorobanVec};
-use soroban_sdk::{IntoVal, String as SorobanString};
 use soroban_env_host::{DiagnosticLevel, Host};
 use soroban_sdk::{Address, Env, InvokeError, Symbol, Val, Vec as SorobanVec};
+use soroban_sdk::{IntoVal, String as SorobanString};
 use std::collections::HashMap;
 use tracing::{info, warn};
 
@@ -81,8 +79,10 @@ impl ContractExecutor {
                 }
                 InvokeError::Abort => {
                     warn!("Contract execution aborted");
-                    Err(DebuggerError::ExecutionError("Contract execution aborted".to_string())
-                        .into())
+                    Err(
+                        DebuggerError::ExecutionError("Contract execution aborted".to_string())
+                            .into(),
+                    )
                 }
             },
             Err(Err(inv_err)) => {
@@ -90,21 +90,9 @@ impl ContractExecutor {
                 Err(DebuggerError::ExecutionError(format!(
                     "Invocation error conversion failed: {:?}",
                     inv_err
-                InvokeError::Contract(code) => Err(DebuggerError::ExecutionError(format!(
-                    "Contract error code: {}",
-                    code
                 ))
-                .into()),
-                InvokeError::Abort => Err(DebuggerError::ExecutionError(
-                    "Contract execution aborted".to_string(),
-                )
-                .into()),
-            },
-            Err(Err(inv_err)) => Err(DebuggerError::ExecutionError(format!(
-                "Invocation error conversion failed: {:?}",
-                inv_err
-            ))
-            .into()),
+                .into())
+            }
         }
     }
 
@@ -119,19 +107,6 @@ impl ContractExecutor {
         self.env.host()
     }
 
-    /// Parse JSON arguments into Soroban `Val`s
-    fn parse_args(&self, args_json: &str) -> Result<Vec<Val>> {
-        let v: Value = serde_json::from_str(args_json).map_err(|e| anyhow!("Invalid JSON args: {e}"))?;
-
-        let arr = v
-            .as_array()
-            .ok_or_else(|| anyhow!("Args must be a JSON array, e.g. [1, \"x\"]"))?;
-
-        let mut out: Vec<Val> = Vec::with_capacity(arr.len());
-        for item in arr {
-            out.push(self.json_to_val(item)?);
-        }
-        Ok(out)
     /// Get the authorization tree from the environment.
     pub fn get_auth_tree(&self) -> Result<Vec<crate::inspector::auth::AuthNode>> {
         crate::inspector::auth::AuthInspector::get_auth_tree(&self.env)

@@ -1,10 +1,10 @@
 use crate::profiler::session::ProfileSession;
 use crate::runtime::executor::ContractExecutor;
 use crate::Result;
+use anyhow::anyhow;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Write;
-use anyhow::anyhow;
 
 #[derive(Debug, Clone)]
 pub struct OperationCost {
@@ -99,53 +99,53 @@ impl GasOptimizer {
         let storage_accesses: HashMap<String, StorageAccess> = HashMap::new();
 
         let exec_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-    self.executor.execute(function_name, args)
-}));
+            self.executor.execute(function_name, args)
+        }));
 
-// Always finish the session so we still capture metrics up to failure.
-let metrics = session.finish();
-let total_cpu = metrics.cpu_instructions;
-let total_memory = metrics.memory_bytes;
-let wall_time_ms = metrics.wall_time.as_millis();
+        // Always finish the session so we still capture metrics up to failure.
+        let metrics = session.finish();
+        let total_cpu = metrics.cpu_instructions;
+        let total_memory = metrics.memory_bytes;
+        let wall_time_ms = metrics.wall_time.as_millis();
 
-match exec_result {
-    Ok(Ok(_)) => {
-        // success, continue
-    }
-    Ok(Err(e)) => {
-        // contract returned an error (non-panic)
-        let profile = FunctionProfile {
-            name: function_name.to_string(),
-            total_cpu,
-            total_memory,
-            wall_time_ms,
-            operations,
-            storage_accesses,
-        };
-        self.function_profiles
-            .insert(function_name.to_string(), profile.clone());
-        return Err(e);
-    }
-    Err(_) => {
-        // panic happened (e.g. budget exceeded escalated to panic)
-        let profile = FunctionProfile {
-            name: function_name.to_string(),
-            total_cpu,
-            total_memory,
-            wall_time_ms,
-            operations,
-            storage_accesses,
-        };
-        self.function_profiles
-            .insert(function_name.to_string(), profile.clone());
+        match exec_result {
+            Ok(Ok(_)) => {
+                // success, continue
+            }
+            Ok(Err(e)) => {
+                // contract returned an error (non-panic)
+                let profile = FunctionProfile {
+                    name: function_name.to_string(),
+                    total_cpu,
+                    total_memory,
+                    wall_time_ms,
+                    operations,
+                    storage_accesses,
+                };
+                self.function_profiles
+                    .insert(function_name.to_string(), profile.clone());
+                return Err(e);
+            }
+            Err(_) => {
+                // panic happened (e.g. budget exceeded escalated to panic)
+                let profile = FunctionProfile {
+                    name: function_name.to_string(),
+                    total_cpu,
+                    total_memory,
+                    wall_time_ms,
+                    operations,
+                    storage_accesses,
+                };
+                self.function_profiles
+                    .insert(function_name.to_string(), profile.clone());
 
-        // Return a normal error instead of crashing the whole CLI
-        return Err(anyhow::anyhow!(
+                // Return a normal error instead of crashing the whole CLI
+                return Err(anyhow::anyhow!(
             "Contract execution panicked (likely budget exceeded). Try smaller inputs or optimize allocations."
         )
         .into());
-    }
-}
+            }
+        }
 
         let metrics = session.finish();
 
@@ -212,7 +212,10 @@ match exec_result {
         }
     }
 
-    fn analyze_expensive_operations(&self, function: &FunctionProfile) -> Vec<OptimizationSuggestion> {
+    fn analyze_expensive_operations(
+        &self,
+        function: &FunctionProfile,
+    ) -> Vec<OptimizationSuggestion> {
         let mut suggestions = Vec::new();
 
         if function.total_cpu > 1_000_000 {
@@ -360,7 +363,9 @@ match exec_result {
                 writeln!(output, "|-----------|----------|-------------|----------|").unwrap();
 
                 let mut sorted_ops = function.operations.clone();
-                sorted_ops.sort_by(|a, b| (b.cpu_cost + b.memory_cost).cmp(&(a.cpu_cost + a.memory_cost)));
+                sorted_ops.sort_by(|a, b| {
+                    (b.cpu_cost + b.memory_cost).cmp(&(a.cpu_cost + a.memory_cost))
+                });
 
                 for op in sorted_ops.iter().take(5) {
                     writeln!(

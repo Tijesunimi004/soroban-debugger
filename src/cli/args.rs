@@ -152,6 +152,10 @@ pub struct RunArgs {
     /// Execute contract in dry-run mode: simulate execution without persisting storage changes
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
 }
 
 impl RunArgs {
@@ -193,6 +197,10 @@ pub struct InteractiveArgs {
     /// Network snapshot file to load before starting interactive session
     #[arg(long)]
     pub network_snapshot: Option<PathBuf>,
+
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
 }
 
 impl InteractiveArgs {
@@ -214,6 +222,10 @@ pub struct InspectArgs {
     /// Show contract metadata
     #[arg(long)]
     pub metadata: bool,
+
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
 }
 
 #[derive(Parser)]
@@ -241,6 +253,10 @@ pub struct OptimizeArgs {
     /// Network snapshot file to load before analysis
     #[arg(long)]
     pub network_snapshot: Option<PathBuf>,
+
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
 }
 
 #[derive(Parser)]
@@ -309,4 +325,8 @@ pub struct ProfileArgs {
     /// Initial storage state as JSON object
     #[arg(short, long)]
     pub storage: Option<String>,
+
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
 }

@@ -38,4 +38,7 @@ pub enum DebuggerError {
 
     #[error("Storage error: {0}")]
     StorageError(String),
+
+    #[error("WASM checksum mismatch.\n  Expected : {expected}\n  Computed : {actual}")]
+    ChecksumMismatch { expected: String, actual: String },
 }
