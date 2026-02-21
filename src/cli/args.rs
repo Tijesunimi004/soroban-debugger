@@ -1,7 +1,6 @@
-use crate::config::Config;
 use clap::{Parser, Subcommand};
-use clap_complete::Shell;
 use std::path::PathBuf;
+use crate::config::Config;
 
 /// Verbosity level for output control
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,19 +34,12 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub verbose: bool,
 
-    /// Show historical budget trend visualization
-    #[arg(long)]
-    pub budget_trend: bool,
-
-    /// Filter budget trend by contract hash
-    #[arg(long)]
-    pub trend_contract: Option<String>,
-
-    /// Filter budget trend by function name
-    #[arg(long)]
-    pub trend_function: Option<String>,
+    /// Suppress ASCII banner on startup
+    #[arg(long, global = true)]
+    pub no_banner: bool,
 
     #[command(subcommand)]
+    pub command: Commands,
     pub command: Option<Commands>,
 
     /// Show detailed version information
@@ -58,6 +50,7 @@ pub struct Cli {
     #[arg(long)]
     pub list_functions: Option<PathBuf>,
 }
+
 impl Cli {
     /// Get the effective verbosity level
     pub fn verbosity(&self) -> Verbosity {
@@ -72,16 +65,12 @@ impl Cli {
 }
 
 #[derive(Subcommand)]
-#[allow(clippy::large_enum_variant)]
 pub enum Commands {
     /// Run a contract function with the debugger
     Run(RunArgs),
 
     /// Start an interactive debugging session
     Interactive(InteractiveArgs),
-
-    /// Launch the full-screen TUI dashboard
-    Tui(TuiArgs),
 
     /// Inspect contract information without executing
     Inspect(InspectArgs),
@@ -91,16 +80,11 @@ pub enum Commands {
     /// Analyze contract and generate gas optimization suggestions
     Optimize(OptimizeArgs),
 
-    /// Profile a single function execution and print hotspots + suggestions
-    Profile(ProfileArgs),
     /// Check compatibility between two contract versions
     UpgradeCheck(UpgradeCheckArgs),
 
     /// Compare two execution trace JSON files side-by-side
     Compare(CompareArgs),
-
-    /// Run symbolic execution to explore contract input space
-    Symbolic(SymbolicArgs),
 }
 
 #[derive(Parser)]
@@ -108,10 +92,6 @@ pub struct RunArgs {
     /// Path to the contract WASM file
     #[arg(short, long)]
     pub contract: PathBuf,
-
-    /// Deprecated: use --contract instead
-    #[arg(long, hide = true, alias = "wasm", alias = "contract-path")]
-    pub wasm: Option<PathBuf>,
 
     /// Function name to execute
     #[arg(short, long)]
@@ -149,7 +129,7 @@ pub struct RunArgs {
     pub verbose: bool,
 
     /// Output format (text, json)
-    #[arg(long)]
+    #[arg(short, long)]
     pub format: Option<String>,
 
     /// Show contract events emitted during execution
@@ -171,10 +151,6 @@ pub struct RunArgs {
     /// Execute the contract call N times for stress testing
     #[arg(long)]
     pub repeat: Option<u32>,
-
-    /// Mock cross-contract return: CONTRACT_ID.function=return_value (repeatable)
-    #[arg(long, value_name = "CONTRACT_ID.function=return_value")]
-    pub mock: Vec<String>,
 
     /// Filter storage output by key pattern (repeatable). Supports:
     ///   prefix*       — match keys starting with prefix
@@ -232,7 +208,7 @@ impl RunArgs {
         if self.breakpoint.is_empty() && !config.debug.breakpoints.is_empty() {
             self.breakpoint = config.debug.breakpoints.clone();
         }
-
+        
         // Show events
         if !self.show_events {
             if let Some(show) = config.output.show_events {
@@ -256,23 +232,16 @@ impl RunArgs {
     }
 }
 
+
 #[derive(Parser)]
 pub struct InteractiveArgs {
     /// Path to the contract WASM file
     #[arg(short, long)]
     pub contract: PathBuf,
 
-    /// Deprecated: use --contract instead
-    #[arg(long, hide = true, alias = "wasm", alias = "contract-path")]
-    pub wasm: Option<PathBuf>,
-
     /// Network snapshot file to load before starting interactive session
     #[arg(long)]
     pub network_snapshot: Option<PathBuf>,
-
-    /// Deprecated: use --network-snapshot instead
-    #[arg(long, hide = true, alias = "snapshot")]
-    pub snapshot: Option<PathBuf>,
 }
 
 impl InteractiveArgs {
@@ -281,15 +250,19 @@ impl InteractiveArgs {
     }
 }
 
+
+#[derive(Parser)]
+pub struct CompletionsArgs {
+    /// Shell to generate completions for (bash, zsh, fish, powershell)
+    #[arg(short, long)]
+    pub shell: String,
+}
+
 #[derive(Parser)]
 pub struct InspectArgs {
     /// Path to the contract WASM file
     #[arg(short, long)]
     pub contract: PathBuf,
-
-    /// Deprecated: use --contract instead
-    #[arg(long, hide = true, alias = "wasm", alias = "contract-path")]
-    pub wasm: Option<PathBuf>,
 
     /// Show exported functions
     #[arg(long)]
@@ -305,10 +278,6 @@ pub struct OptimizeArgs {
     /// Path to the contract WASM file
     #[arg(short, long)]
     pub contract: PathBuf,
-
-    /// Deprecated: use --contract instead
-    #[arg(long, hide = true, alias = "wasm", alias = "contract-path")]
-    pub wasm: Option<PathBuf>,
 
     /// Function name to analyze (can be specified multiple times)
     #[arg(short, long)]
@@ -329,10 +298,6 @@ pub struct OptimizeArgs {
     /// Network snapshot file to load before analysis
     #[arg(long)]
     pub network_snapshot: Option<PathBuf>,
-
-    /// Deprecated: use --network-snapshot instead
-    #[arg(long, hide = true, alias = "snapshot")]
-    pub snapshot: Option<PathBuf>,
 }
 
 #[derive(Parser)]
