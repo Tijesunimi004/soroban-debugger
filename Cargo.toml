@@ -47,6 +47,11 @@ assert_cmd = "2.0"
 predicates = "3.0"
 tempfile = "3.8"
 proptest = "1.0"
+criterion = "0.5"
+
+[[bench]]
+name = "debugger_bench"
+harness = false
 
 [profile.release]
 opt-level = 3

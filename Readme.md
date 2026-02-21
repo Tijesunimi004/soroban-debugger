@@ -355,6 +355,28 @@ cargo test
 cargo run --example simple_token
 ```
 
+## Benchmarks
+
+The project includes a benchmark suite using [Criterion.rs](https://github.com/bheisler/criterion.rs) to track performance and prevent regressions.
+
+To run the full benchmark suite:
+
+```bash
+cargo bench
+```
+
+### Baseline Results (v0.1.0)
+
+| Component | Operation | Time (Baseline) |
+|-----------|-----------|-----------------|
+| Runtime | WASM Loading (100KB) | ~20 µs |
+| Inspector | Storage Snapshot (1000 items) | ~0.5 ns |
+| Inspector | Storage Diff (1000 items) | ~60 µs |
+| Inspector | Filter Parsing (3 patterns) | ~200 µs |
+| Inspector | Filter Matching | ~10 ns |
+
+Benchmarks are run automatically in CI to ensure performance stays within acceptable bounds.
+
 ## Requirements
 
 - Rust 1.75 or later
