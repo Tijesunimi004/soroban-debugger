@@ -422,4 +422,3 @@ pub struct SymbolicArgs {
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 }
-
