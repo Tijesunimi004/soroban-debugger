@@ -1,6 +1,6 @@
 use crate::cli::args::{
     CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs, RunArgs, TuiArgs,
-    UpgradeCheckArgs, Verbosity,
+    UpgradeCheckArgs, Verbosity, SymbolicArgs,
 };
 use crate::debugger::engine::DebuggerEngine;
 use crate::debugger::instruction_pointer::StepMode;
@@ -799,6 +799,28 @@ pub fn compare(args: CompareArgs) -> Result<()> {
         println!("{}", rendered);
     }
 
+    Ok(())
+}
+
+/// Execute the symbolic command.
+pub fn symbolic(args: SymbolicArgs, _verbosity: Verbosity) -> Result<()> {
+    print_info(format!("Starting symbolic execution analysis for contract: {:?}", args.contract));
+    let wasm_bytes = fs::read(&args.contract).with_context(|| format!("Failed to read WASM file {:?}", args.contract))?;
+
+    let analyzer = crate::analyzer::symbolic::SymbolicAnalyzer::new();
+    let report = analyzer.analyze(&wasm_bytes, &args.function)?;
+
+    print_success(format!("Paths explored: {}", report.paths_explored));
+    print_success(format!("Panics found: {}", report.panics_found));
+
+    let toml = analyzer.generate_scenario_toml(&report);
+    if let Some(out) = args.output {
+        fs::write(&out, toml).context("Failed to write toml")?;
+        print_success(format!("Wrote scenario to {:?}", out));
+    } else {
+        println!("{}", toml);
+    }
+    
     Ok(())
 }
 

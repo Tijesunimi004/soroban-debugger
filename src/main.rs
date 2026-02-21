@@ -143,6 +143,9 @@ fn main() -> Result<()> {
             soroban_debugger::cli::commands::profile(args)?;
             Ok(())
         }
+        Some(Commands::Symbolic(args)) => {
+            soroban_debugger::cli::commands::symbolic(args, verbosity)
+        }
         None => {
             if cli.budget_trend {
                 soroban_debugger::cli::commands::show_budget_trend(

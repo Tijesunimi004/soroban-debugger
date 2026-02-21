@@ -94,6 +94,9 @@ pub enum Commands {
 
     /// Compare two execution trace JSON files side-by-side
     Compare(CompareArgs),
+
+    /// Run symbolic execution to explore contract input space
+    Symbolic(SymbolicArgs),
 }
 
 #[derive(Parser)]
@@ -405,3 +408,19 @@ pub struct ProfileArgs {
     #[arg(short, long)]
     pub storage: Option<String>,
 }
+
+#[derive(Parser)]
+pub struct SymbolicArgs {
+    /// Path to the contract WASM file
+    #[arg(short, long)]
+    pub contract: PathBuf,
+
+    /// Function name to execute
+    #[arg(short, long)]
+    pub function: String,
+
+    /// Output file for the scenario TOML
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+}
+
