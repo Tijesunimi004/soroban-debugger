@@ -31,7 +31,7 @@ use base64::{engine::general_purpose, Engine as _};
 use hex;
 use serde_json::Value;
 use soroban_sdk::{
-    Bytes, BytesN, Env, Map, String as SorobanString, Symbol, TryFromVal, Val, Vec as SorobanVec,
+    Address, Bytes, BytesN, Env, Map, String as SorobanString, Symbol, TryFromVal, Val, Vec as SorobanVec,
 };
 use thiserror::Error;
 use tracing::{debug, warn};
@@ -42,7 +42,7 @@ pub enum ArgumentParseError {
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 
-    #[error("Unsupported type: {0}. Supported types: u32, i32, u64, i64, u128, i128, bool, string, symbol, option, tuple")]
+    #[error("Unsupported type: {0}. Supported types: u32, i32, u64, i64, u128, i128, bool, string, symbol, address, option, tuple")]
     UnsupportedType(String),
 
     #[error("Failed to convert value: {0}")]
@@ -188,10 +188,38 @@ impl ArgumentParser {
             "bool" => self.convert_bool(val),
             "string" => self.convert_string(val),
             "symbol" => self.convert_symbol(val),
+            "address" => self.convert_address(val),
             "option" => self.convert_option(val),
             "tuple" => self.convert_tuple(val, obj),
             other => Err(ArgumentParseError::UnsupportedType(other.to_string())),
         }
+    }
+
+    /// Convert a JSON string to a Soroban Address Val
+    fn convert_address(&self, value: &Value) -> Result<Val, ArgumentParseError> {
+        let s = value.as_str().ok_or_else(|| ArgumentParseError::TypeMismatch {
+            expected: "address (string)".to_string(),
+            actual: format!("{}", value),
+        })?;
+
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        let parsed = catch_unwind(AssertUnwindSafe(|| {
+            Address::from_str(&self.env, s)
+        }));
+
+        let address = match parsed {
+            Ok(addr) => addr,
+            Err(_) => {
+                return Err(ArgumentParseError::ConversionError(format!(
+                    "Invalid address format: {}",
+                    s
+                )))
+            }
+        };
+
+        Val::try_from_val(&self.env, &address).map_err(|e| {
+            ArgumentParseError::ConversionError(format!("Failed to convert Address to Val: {:?}", e))
+        })
     }
 
     /// Convert a JSON number to u32 Val
@@ -443,6 +471,24 @@ impl ArgumentParser {
                 }
             }
             Value::String(s) => {
+                // If it looks like an address (starts with C or G and is 56 chars), try to parse as address
+                if (s.starts_with('C') || s.starts_with('G')) && s.len() == 56 {
+                    use std::panic::{catch_unwind, AssertUnwindSafe};
+                    let parsed = catch_unwind(AssertUnwindSafe(|| {
+                        Address::from_str(&self.env, s)
+                    }));
+
+                    if let Ok(address) = parsed {
+                        debug!("Converting string to Address: {}", s);
+                        return Val::try_from_val(&self.env, &address).map_err(|e| {
+                            ArgumentParseError::ConversionError(format!(
+                                "Failed to convert detected Address to Val: {:?}",
+                                e
+                            ))
+                        });
+                    }
+                }
+
                 debug!("Converting string to Symbol: {}", s);
                 // Default bare strings to Symbol (backward compatible)
                 let symbol = Symbol::new(&self.env, s);
@@ -1020,5 +1066,32 @@ mod tests {
         assert!(result.is_ok());
         let vals = result.unwrap();
         assert!(vals[0].is_void());
+    }
+
+    #[test]
+    fn test_typed_address() {
+        let parser = create_parser();
+        let addr = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADUI";
+        let json = format!(r#"[{{ "type": "address", "value": "{}" }}]"#, addr);
+        let result = parser.parse_args_string(&json);
+        assert!(result.is_ok(), "Failed to parse typed address: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_bare_address_detection() {
+        let parser = create_parser();
+        let addr = "GD3IYSAL6Z2A3A4A3A4A3A4A3A4A3A4A3A4A3A4A3A4A3A4A3A4A3A4A";
+        let json = format!(r#"["{}"]"#, addr);
+        let result = parser.parse_args_string(&json);
+        assert!(result.is_ok(), "Failed to detect bare address: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_invalid_address_error() {
+        let parser = create_parser();
+        let json = r#"[{"type": "address", "value": "too-short"}]"#;
+        let result = parser.parse_args_string(json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid address"));
     }
 }
