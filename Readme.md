@@ -7,6 +7,8 @@ A command-line debugger for Soroban smart contracts on the Stellar network. Debu
 ## Features
 
 - Step-through execution of Soroban contracts
+- **Source-Level Debugging**: Map WASM execution back to Rust source lines
+- **Time-Travel Debugging**: Step backward and navigate execution history
 - Set breakpoints at function boundaries
 - Inspect contract storage and state
 - Track resource usage (CPU and memory budget)
@@ -377,7 +379,8 @@ For precise type control, use `{"type": "<type>", "value": <value>}`:
 | `i128`   | Signed 128-bit integer     | `{"type": "i128", "value": -100}`          |
 | `bool`   | Boolean value              | `{"type": "bool", "value": true}`          |
 | `symbol` | Soroban Symbol (≤32 chars) | `{"type": "symbol", "value": "hello"}`     |
-| `string` | Soroban String (any len)   | `{"type": "string", "value": "long text"}` |
+| `string`  | Soroban String (any len)   | `{"type": "string", "value": "long text"}` |
+| `address` | Soroban Address (Contract/Acc) | `{"type": "address", "value": "C..."}`     |
 
 ```bash
 # Typed arguments for precise control
@@ -390,13 +393,21 @@ soroban-debug run --contract token.wasm --function transfer \
 # Soroban String for longer text
 soroban-debug run --contract dao.wasm --function create_proposal \
   --args '[{"type": "string", "value": "My proposal title"}]'
+
+# Address type (contract or account addresses)
+soroban-debug run --contract token.wasm --function balance_of \
+  --args '[{"type": "address", "value": "GD3IYSAL6Z2A3A4A3A4A3A4A3A4A3A4A3A4A3A4A3A4A3A4A3A4A3A4A"}]'
+
+# Bare address (auto-detected if starts with C or G and is 56 chars)
+soroban-debug run --contract token.wasm --function transfer \
+  --args '["CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADUI", "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", 100]'
 ```
 
 ### Error Handling
 
 The parser provides clear error messages for common issues:
 
-- **Unsupported type**: `Unsupported type: bytes. Supported types: u32, i32, u64, i64, u128, i128, bool, string, symbol`
+- **Unsupported type**: `Unsupported type: bytes. Supported types: u32, i32, u64, i64, u128, i128, bool, string, symbol, address`
 - **Out of range**: `Value out of range for type u32: 5000000000 (valid range: 0..=4294967295)`
 - **Type mismatch**: `Type/value mismatch: expected u32 (non-negative integer) but got "hello"`
 - **Invalid JSON**: `JSON parsing error: ...`
@@ -570,9 +581,10 @@ cargo clippy
 - Call stack visualization
 - Replay execution from trace
 
-### Phase 3
-- WASM instrumentation for precise breakpoints
-- Source map support
+### Phase 3 (Current)
+- Source map support for Rust debugging
+- Time-travel debugging (step back)
+- Visual execution timeline
 - Memory profiling
 - Performance analysis tools -->
 
