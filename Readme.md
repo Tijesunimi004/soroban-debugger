@@ -168,6 +168,69 @@ soroban-debug run --contract token.wasm --function mint \
   --storage-filter 'total_supply'
 ```
 
+#### Exporting Execution Traces
+
+You can export a full record of the contract execution to a JSON file using the `--trace-output` flag. This trace captures function calls, arguments, return values, storage snapshots (before and after), events, and budget consumption.
+
+```bash
+soroban-debug run \
+  --wasm contract.wasm \
+  --function hello \
+  --trace-output execution_trace.json
+```
+
+These traces can later be used with the `compare` command to identify regressions or differences between runs.
+
+##### Example Trace Output (JSON)
+
+An exported trace includes versioning, metadata, and full execution state:
+
+```json
+{
+  "version": "1.0",
+  "label": "Execution of hello",
+  "contract": "CA7QYNF5GE5XEC4HALXWFVQQ5TQWQ5LF7WMXMEQG7BWHBQV26YCWL5",
+  "function": "hello",
+  "args": "[\"world\"]",
+  "storage_before": {
+    "counter": "0"
+  },
+  "storage": {
+    "counter": "1"
+  },
+  "budget": {
+    "cpu_instructions": 1540,
+    "memory_bytes": 450,
+    "cpu_limit": 1000000,
+    "memory_limit": 1000000
+  },
+  "return_value": "void",
+  "call_sequence": [
+    {
+      "function": "hello",
+      "args": "[\"world\"]",
+      "depth": 0,
+      "budget": {
+        "cpu_instructions": 1540,
+        "memory_bytes": 450
+      }
+    }
+  ],
+  "events": [
+    {
+      "contract_id": "CA7Q...",
+      "topics": ["\"greeting\""],
+      "data": "\"Hello, world!\""
+    }
+  ]
+}
+```
+
+| Pattern          | Type   | Matches                                |
+|------------------|--------|----------------------------------------|
+| `balance:*`      | Prefix | Keys starting with `balance:`          |
+| `re:^user_\d+$`  | Regex  | Keys matching the regex                |
+| `total_supply`   | Exact  | Only the key `total_supply`            |
 | Pattern         | Type   | Matches                       |
 | --------------- | ------ | ----------------------------- |
 | `balance:*`     | Prefix | Keys starting with `balance:` |

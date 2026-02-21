@@ -137,6 +137,9 @@ pub struct RunArgs {
     #[arg(long)]
     pub network_snapshot: Option<PathBuf>,
 
+    /// Path to export the execution trace as JSON
+    #[arg(long)]
+    pub trace_output: Option<PathBuf>,
     /// Deprecated: use --network-snapshot instead
     #[arg(long, hide = true, alias = "snapshot")]
     pub snapshot: Option<PathBuf>,

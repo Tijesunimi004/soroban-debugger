@@ -165,6 +165,12 @@ impl ContractExecutor {
         self.env.host()
     }
 
+    /// Get the contract address
+    pub fn contract_address(&self) -> &Address {
+        &self.contract_address
+    }
+
+    /// Parse JSON arguments into contract values
     /// Get the authorization tree from the environment.
     pub fn get_auth_tree(&self) -> Result<Vec<crate::inspector::auth::AuthNode>> {
         crate::inspector::auth::AuthInspector::get_auth_tree(&self.env)
