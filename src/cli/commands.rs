@@ -1,6 +1,6 @@
 use crate::cli::args::{
-    CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs, RunArgs,
-    UpgradeCheckArgs, Verbosity,
+    CompareArgs, InspectArgs, InteractiveArgs, ListFunctionsArgs, OptimizeArgs, ProfileArgs,
+    RunArgs, UpgradeCheckArgs, Verbosity,
 };
 use crate::debugger::engine::DebuggerEngine;
 use crate::debugger::instruction_pointer::StepMode;
@@ -561,6 +561,19 @@ pub fn inspect(args: InspectArgs, _verbosity: Verbosity) -> Result<()> {
 
     println!("\n{}", "=".repeat(54));
     Ok(())
+}
+
+/// Execute the list-functions command (shorthand for `inspect --functions`).
+///
+/// Constructs an [`InspectArgs`] with `functions: true` and delegates
+/// entirely to [`inspect`], guaranteeing identical output.
+pub fn list_functions(args: ListFunctionsArgs, verbosity: Verbosity) -> Result<()> {
+    let inspect_args = InspectArgs {
+        contract: args.contract,
+        functions: true,
+        metadata: false,
+    };
+    inspect(inspect_args, verbosity)
 }
 
 /// Parse JSON arguments with validation.
