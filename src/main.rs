@@ -119,10 +119,44 @@ fn handle_deprecations(cli: &mut Cli) {
     }
 }
 
+fn banner_text() -> String {
+    format!(
+        "  ____                  _\n / ___|  ___  _ __ ___ | |__   __ _ _ __\n \\___ \\ / _ \\| '__/ _ \\| '_ \\ / _` | '_ \\\n  ___) | (_) | | | (_) | |_) | (_| | | | |\n |____/ \\___/|_|  \\___/|_.__/ \\__,_|_| |_|  soroban-debugger v{}",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+fn print_banner() {
+    println!("{}", banner_text());
+}
+
+fn env_var_disables_banner(value: Option<&str>) -> bool {
+    value.is_some_and(|v| {
+        let trimmed = v.trim();
+        trimmed == "1" || trimmed.eq_ignore_ascii_case("true")
+    })
+}
+
+fn should_show_banner_with(args: &Cli, is_interactive: bool, no_banner_env: Option<&str>) -> bool {
+    is_interactive && !args.no_banner && !env_var_disables_banner(no_banner_env)
+}
+
+fn should_show_banner(args: &Cli) -> bool {
+    let no_banner_env = std::env::var("NO_BANNER").ok();
+    should_show_banner_with(
+        args,
+        atty::is(atty::Stream::Stdout),
+        no_banner_env.as_deref(),
+    )
+}
+
 fn main() -> miette::Result<()> {
     Formatter::configure_colors_from_env();
 
     let mut cli = Cli::parse();
+    if should_show_banner(&cli) {
+        print_banner();
+    }
     handle_deprecations(&mut cli);
     let verbosity = cli.verbosity();
 
@@ -202,4 +236,52 @@ fn main() -> miette::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_cli(args: &[&str]) -> Cli {
+        Cli::try_parse_from(args).expect("failed to parse cli args")
+    }
+
+    #[test]
+    fn banner_contains_project_name_and_version() {
+        let banner = banner_text();
+        assert!(banner.contains("soroban-debugger"));
+        assert!(banner.contains(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn banner_is_max_five_lines_tall() {
+        let banner = banner_text();
+        assert!(banner.lines().count() <= 5);
+    }
+
+    #[test]
+    fn no_banner_flag_suppresses_output() {
+        let args = parse_cli(&["soroban-debug", "--no-banner"]);
+        assert!(!should_show_banner_with(&args, true, None));
+    }
+
+    #[test]
+    fn no_banner_env_var_suppresses_output() {
+        let args = parse_cli(&["soroban-debug"]);
+        assert!(!should_show_banner_with(&args, true, Some("1")));
+        assert!(!should_show_banner_with(&args, true, Some("true")));
+        assert!(!should_show_banner_with(&args, true, Some("TRUE")));
+    }
+
+    #[test]
+    fn non_interactive_output_suppresses_banner() {
+        let args = parse_cli(&["soroban-debug"]);
+        assert!(!should_show_banner_with(&args, false, None));
+    }
+
+    #[test]
+    fn interactive_output_shows_banner_when_not_suppressed() {
+        let args = parse_cli(&["soroban-debug"]);
+        assert!(should_show_banner_with(&args, true, None));
+    }
 }
