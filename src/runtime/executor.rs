@@ -1,10 +1,14 @@
+use crate::runtime::mocking::MockRegistry;
 use crate::utils::ArgumentParser;
+use crate::{runtime::mocking::MockCallLogEntry, runtime::mocking::MockContractDispatcher};
 use crate::{DebuggerError, Result};
 
 use soroban_env_host::xdr::ScVal;
 use soroban_env_host::{DiagnosticLevel, Host, TryFromVal};
 use soroban_sdk::{Address, Env, InvokeError, Symbol, Val, Vec as SorobanVec};
 use std::collections::HashMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
 
 /// Represents a captured execution trace.
@@ -28,6 +32,9 @@ pub struct ContractExecutor {
     env: Env,
     contract_address: Address,
     last_execution: Option<ExecutionRecord>,
+    mock_registry: Arc<Mutex<MockRegistry>>,
+    wasm_bytes: Vec<u8>,
+    timeout_secs: u64,
 }
 
 impl ContractExecutor {
@@ -46,13 +53,27 @@ impl ContractExecutor {
             env,
             contract_address,
             last_execution: None,
+            mock_registry: Arc::new(Mutex::new(MockRegistry::default())),
+            wasm_bytes: wasm,
+            timeout_secs: 30,
         })
+    }
+
+    pub fn set_timeout(&mut self, secs: u64) {
+        self.timeout_secs = secs;
     }
 
     /// Execute a contract function.
     pub fn execute(&mut self, function: &str, args: Option<&str>) -> Result<String> {
         info!("Executing function: {}", function);
 
+        // Validate function existence
+        let exported_functions = crate::utils::wasm::parse_functions(&self.wasm_bytes)?;
+        if !exported_functions.contains(&function.to_string()) {
+            return Err(DebuggerError::InvalidFunction(function.to_string()).into());
+        }
+
+        // Convert function name to Symbol
         let func_symbol = Symbol::new(&self.env, function);
 
         let parsed_args = if let Some(args_json) = args {
@@ -78,7 +99,26 @@ impl ContractExecutor {
             .map_err(|e| {
                 DebuggerError::ExecutionError(format!("Failed to convert arguments to ScVal: {:?}", e))
             })?;
-        
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        if self.timeout_secs > 0 {
+            let timeout_secs = self.timeout_secs;
+            std::thread::spawn(move || {
+                match rx.recv_timeout(std::time::Duration::from_secs(timeout_secs)) {
+                    Ok(_) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        eprintln!(
+                            "\nError: Contract execution timed out after {} seconds.",
+                            timeout_secs
+                        );
+                        std::process::exit(124);
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
+                }
+            });
+        }
+
+        // Call the contract
         let invocation_result = self.env.try_invoke_contract::<Val, InvokeError>(
             &self.contract_address,
             &func_symbol,
@@ -90,12 +130,14 @@ impl ContractExecutor {
 
         let (display_result, record_result) = match &invocation_result {
             Ok(Ok(val)) => {
+                info!("Function executed successfully");
                 let sc_val = ScVal::try_from_val(self.env.host(), val).map_err(|e| {
                     DebuggerError::ExecutionError(format!("Result conversion failed: {:?}", e))
                 })?;
                 (Ok(format!("{:?}", val)), Ok(sc_val))
             }
             Ok(Err(conv_err)) => {
+                warn!("Return value conversion failed: {:?}", conv_err);
                 let err_msg = format!("Return value conversion failed: {:?}", conv_err);
                 (
                     Err(DebuggerError::ExecutionError(err_msg.clone()).into()),
@@ -104,8 +146,14 @@ impl ContractExecutor {
             }
             Err(Ok(inv_err)) => {
                 let err_msg = match inv_err {
-                    InvokeError::Contract(code) => format!("Contract error code: {}", code),
-                    InvokeError::Abort => "Contract execution aborted".to_string(),
+                    InvokeError::Contract(code) => {
+                        warn!("Contract returned error code: {}", code);
+                        format!("The contract returned an error code: {}. This typically indicates a business logic failure (e.g. `panic!` or `require!`).", code)
+                    }
+                    InvokeError::Abort => {
+                        warn!("Contract execution aborted");
+                        "Contract execution was aborted. This could be due to a trap, budget exhaustion, or an explicit abort call.".to_string()
+                    }
                 };
                 (
                     Err(DebuggerError::ExecutionError(err_msg.clone()).into()),
@@ -113,13 +161,19 @@ impl ContractExecutor {
                 )
             }
             Err(Err(inv_err)) => {
-                let err_msg = format!("Invocation error conversion failed: {:?}", inv_err);
+                warn!("Invocation error conversion failed: {:?}", inv_err);
+                let err_msg = format!("Invocation failed with internal error: {:?}", inv_err);
                 (
                     Err(DebuggerError::ExecutionError(err_msg.clone()).into()),
                     Err(err_msg),
                 )
             }
         };
+
+        let _ = tx.send(());
+
+        // Display budget usage and warnings
+        crate::inspector::BudgetInspector::display(self.env.host());
 
         self.last_execution = Some(ExecutionRecord {
             function: function.to_string(),
@@ -141,6 +195,23 @@ impl ContractExecutor {
     pub fn set_initial_storage(&mut self, _storage_json: String) -> Result<()> {
         info!("Setting initial storage (not yet implemented)");
         Ok(())
+    }
+
+    pub fn set_mock_specs(&mut self, specs: &[String]) -> Result<()> {
+        let registry = MockRegistry::from_cli_specs(&self.env, specs)?;
+        self.set_mock_registry(registry)
+    }
+
+    pub fn set_mock_registry(&mut self, registry: MockRegistry) -> Result<()> {
+        self.mock_registry = Arc::new(Mutex::new(registry));
+        self.install_mock_dispatchers()
+    }
+
+    pub fn get_mock_call_log(&self) -> Vec<MockCallLogEntry> {
+        match self.mock_registry.lock() {
+            Ok(registry) => registry.calls().to_vec(),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Get the host instance.
@@ -181,7 +252,10 @@ impl ContractExecutor {
         Ok(self
             .env
             .host()
-            .get_diagnostic_events()?
+            .get_diagnostic_events()
+            .map_err(|e| {
+                DebuggerError::ExecutionError(format!("Failed to get diagnostic events: {}", e))
+            })?
             .0
             .into_iter()
             .map(|he| he.event)
@@ -194,5 +268,47 @@ impl ContractExecutor {
             warn!("Failed to parse arguments: {}", e);
             DebuggerError::InvalidArguments(e.to_string()).into()
         })
+    }
+
+    fn install_mock_dispatchers(&self) -> Result<()> {
+        let ids = match self.mock_registry.lock() {
+            Ok(registry) => registry.mocked_contract_ids(),
+            Err(_) => {
+                return Err(DebuggerError::ExecutionError(
+                    "Mock registry lock poisoned".to_string(),
+                )
+                .into())
+            }
+        };
+
+        for contract_id in ids {
+            let address = self.parse_contract_address(&contract_id)?;
+            let dispatcher =
+                MockContractDispatcher::new(contract_id.clone(), Arc::clone(&self.mock_registry))
+                    .boxed();
+            self.env
+                .host()
+                .register_test_contract(address.to_object(), dispatcher)
+                .map_err(|e| {
+                    DebuggerError::ExecutionError(format!(
+                        "Failed to register test contract: {}",
+                        e
+                    ))
+                })?;
+        }
+
+        Ok(())
+    }
+    fn parse_contract_address(&self, contract_id: &str) -> Result<Address> {
+        let parsed = catch_unwind(AssertUnwindSafe(|| {
+            Address::from_str(&self.env, contract_id)
+        }));
+        match parsed {
+            Ok(addr) => Ok(addr),
+            Err(_) => Err(DebuggerError::InvalidArguments(format!(
+                "Invalid contract id in --mock: {contract_id}"
+            ))
+            .into()),
+        }
     }
 }

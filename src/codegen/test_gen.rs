@@ -2,7 +2,7 @@ use crate::runtime::executor::ExecutionRecord;
 use soroban_env_host::xdr::{Limits, WriteXdr};
 use std::fs;
 use std::path::Path;
-use crate::Result;
+use crate::{Result, DebuggerError};
 
 /// Template engine for generating Soroban unit tests.
 pub struct TestGenerator;
@@ -39,7 +39,7 @@ impl TestGenerator {
         code.push_str("    let mut args = Vec::<Val>::new(&env);\n");
         for arg in &record.args {
             let base64 = arg.to_xdr_base64(Limits::none()).map_err(|e| {
-                anyhow::anyhow!("Failed to encode argument to XDR: {:?}", e)
+                DebuggerError::ExecutionError(format!("Failed to encode argument to XDR: {:?}", e))
             })?;
             code.push_str(&format!(
                 "    args.push_back(Val::try_from_val(&env, &ScVal::from_xdr_base64(\"{}\").unwrap()).unwrap());\n",
@@ -63,7 +63,7 @@ impl TestGenerator {
         match &record.result {
             Ok(val) => {
                 let base64 = val.to_xdr_base64(Limits::none()).map_err(|e| {
-                    anyhow::anyhow!("Failed to encode result to XDR: {:?}", e)
+                    DebuggerError::ExecutionError(format!("Failed to encode result to XDR: {:?}", e))
                 })?;
                 code.push_str(&format!(
                     "    let expected = Val::try_from_val(&env, &ScVal::from_xdr_base64(\"{}\").unwrap()).unwrap();\n",
@@ -92,18 +92,18 @@ impl TestGenerator {
     /// Write the generated test to a file, either overwriting or appending.
     pub fn write_to_file(path: &Path, content: &str, overwrite: bool) -> Result<()> {
         if path.exists() && !overwrite {
-            let mut existing = fs::read_to_string(path)?;
+            let mut existing = fs::read_to_string(path).map_err(|e| DebuggerError::FileError(e.to_string()))?;
             if !existing.trim().is_empty() {
                 existing.push_str("\n\n");
             }
             existing.push_str(content);
-            fs::write(path, existing)?;
+            fs::write(path, existing).map_err(|e| DebuggerError::FileError(e.to_string()))?;
         } else {
             // Create parent directories if they don't exist
             if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
+                fs::create_dir_all(parent).map_err(|e| DebuggerError::FileError(e.to_string()))?;
             }
-            fs::write(path, content)?;
+            fs::write(path, content).map_err(|e| DebuggerError::FileError(e.to_string()))?;
         }
         Ok(())
     }

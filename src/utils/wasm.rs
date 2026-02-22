@@ -1,8 +1,18 @@
-use crate::Result;
-use serde::Deserialize;
+use crate::{DebuggerError, Result};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::fs;
+use std::path::Path;
 use wasmparser::{Parser, Payload};
-
 // ─── existing public API (unchanged) ─────────────────────────────────────────
+
+/// Compute the SHA-256 checksum of a WASM binary.
+pub fn compute_checksum(wasm_bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(wasm_bytes);
+    hex::encode(hasher.finalize())
+}
 
 /// Parse exported functions from a WASM module.
 pub fn parse_functions(wasm_bytes: &[u8]) -> Result<Vec<String>> {
@@ -10,9 +20,13 @@ pub fn parse_functions(wasm_bytes: &[u8]) -> Result<Vec<String>> {
     let parser = Parser::new(0);
 
     for payload in parser.parse_all(wasm_bytes) {
-        if let Payload::ExportSection(reader) = payload? {
+        if let Payload::ExportSection(reader) = payload
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to parse WASM: {}", e)))?
+        {
             for export in reader {
-                let export = export?;
+                let export = export.map_err(|e| {
+                    DebuggerError::WasmLoadError(format!("Failed to read export: {}", e))
+                })?;
                 if matches!(export.kind, wasmparser::ExternalKind::Func) {
                     functions.push(export.name.to_string());
                 }
@@ -23,22 +37,221 @@ pub fn parse_functions(wasm_bytes: &[u8]) -> Result<Vec<String>> {
     Ok(functions)
 }
 
-/// Get high-level module statistics from a WASM binary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrossContractCall {
+    pub caller: String,
+    pub target: String,
+    pub host_function: String,
+}
+
+fn is_cross_contract_import(module: &str, name: &str) -> bool {
+    let module = module.to_ascii_lowercase();
+    let name = name.to_ascii_lowercase();
+
+    (module.contains("env") || module.contains("soroban"))
+        && (name.contains("invoke_contract")
+            || name.contains("call_contract")
+            || name.contains("try_call"))
+}
+
+fn map_import_to_target(import_name: &str) -> String {
+    let import_name = import_name.to_ascii_lowercase();
+    if import_name.contains("invoke_contract") || import_name.contains("call_contract") {
+        "external_contract".to_string()
+    } else {
+        format!("external::{}", import_name)
+    }
+}
+
+/// Parse cross-contract call sites by scanning WASM calls to known host imports.
+pub fn parse_cross_contract_calls(wasm_bytes: &[u8]) -> Result<Vec<CrossContractCall>> {
+    use std::collections::{BTreeSet, HashMap};
+    use wasmparser::Operator;
+
+    let mut export_names: HashMap<u32, String> = HashMap::new();
+    let mut cross_contract_imports: HashMap<u32, String> = HashMap::new();
+    let mut imported_func_count = 0u32;
+    let mut local_function_index = 0u32;
+    let mut calls = Vec::new();
+    let mut dedupe = BTreeSet::new();
+
+    for payload in Parser::new(0).parse_all(wasm_bytes) {
+        match payload
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to parse WASM: {}", e)))?
+        {
+            Payload::ImportSection(reader) => {
+                for import in reader {
+                    let import = import.map_err(|e| {
+                        DebuggerError::WasmLoadError(format!("Failed to read import: {}", e))
+                    })?;
+                    if let wasmparser::TypeRef::Func(_) = import.ty {
+                        let current_index = imported_func_count;
+                        imported_func_count += 1;
+                        if is_cross_contract_import(import.module, import.name) {
+                            cross_contract_imports.insert(current_index, import.name.to_string());
+                        }
+                    }
+                }
+            }
+            Payload::ExportSection(reader) => {
+                for export in reader {
+                    let export = export.map_err(|e| {
+                        DebuggerError::WasmLoadError(format!("Failed to read export: {}", e))
+                    })?;
+                    if matches!(export.kind, wasmparser::ExternalKind::Func) {
+                        export_names.insert(export.index, export.name.to_string());
+                    }
+                }
+            }
+            Payload::CodeSectionEntry(body) => {
+                let current_fn_index = imported_func_count + local_function_index;
+                local_function_index += 1;
+                let caller = export_names
+                    .get(&current_fn_index)
+                    .cloned()
+                    .unwrap_or_else(|| format!("func_{current_fn_index}"));
+
+                let mut reader = body.get_operators_reader().map_err(|e| {
+                    DebuggerError::WasmLoadError(format!("Failed to get operators reader: {}", e))
+                })?;
+                while !reader.eof() {
+                    if let Operator::Call { function_index } = reader.read().map_err(|e| {
+                        DebuggerError::WasmLoadError(format!("Failed to read operator: {}", e))
+                    })? {
+                        if let Some(host_fn_name) = cross_contract_imports.get(&function_index) {
+                            let target = map_import_to_target(host_fn_name);
+                            let key = format!("{caller}->{target}:{host_fn_name}");
+                            if dedupe.insert(key) {
+                                calls.push(CrossContractCall {
+                                    caller: caller.clone(),
+                                    target,
+                                    host_function: host_fn_name.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(calls)
+}
+
+/// Get high-level module statistics and section breakdown from a WASM binary.
 pub fn get_module_info(wasm_bytes: &[u8]) -> Result<ModuleInfo> {
-    let mut info = ModuleInfo::default();
+    let mut info = ModuleInfo {
+        total_size: wasm_bytes.len(),
+        ..ModuleInfo::default()
+    };
     let parser = Parser::new(0);
 
     for payload in parser.parse_all(wasm_bytes) {
-        match payload? {
+        let payload = payload
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to parse WASM: {}", e)))?;
+        match &payload {
             Payload::Version { .. } => {}
             Payload::TypeSection(reader) => {
                 info.type_count = reader.count();
+                info.sections.push(WasmSection {
+                    name: "Type".to_string(),
+                    size: reader.range().end - reader.range().start,
+                    offset: reader.range().start,
+                });
+            }
+            Payload::ImportSection(reader) => {
+                info.sections.push(WasmSection {
+                    name: "Import".to_string(),
+                    size: reader.range().end - reader.range().start,
+                    offset: reader.range().start,
+                });
             }
             Payload::FunctionSection(reader) => {
                 info.function_count = reader.count();
+                info.sections.push(WasmSection {
+                    name: "Function".to_string(),
+                    size: reader.range().end - reader.range().start,
+                    offset: reader.range().start,
+                });
+            }
+            Payload::TableSection(reader) => {
+                info.sections.push(WasmSection {
+                    name: "Table".to_string(),
+                    size: reader.range().end - reader.range().start,
+                    offset: reader.range().start,
+                });
+            }
+            Payload::MemorySection(reader) => {
+                info.sections.push(WasmSection {
+                    name: "Memory".to_string(),
+                    size: reader.range().end - reader.range().start,
+                    offset: reader.range().start,
+                });
+            }
+            Payload::GlobalSection(reader) => {
+                info.sections.push(WasmSection {
+                    name: "Global".to_string(),
+                    size: reader.range().end - reader.range().start,
+                    offset: reader.range().start,
+                });
             }
             Payload::ExportSection(reader) => {
                 info.export_count = reader.count();
+                info.sections.push(WasmSection {
+                    name: "Export".to_string(),
+                    size: reader.range().end - reader.range().start,
+                    offset: reader.range().start,
+                });
+            }
+            Payload::StartSection { range, .. } => {
+                info.sections.push(WasmSection {
+                    name: "Start".to_string(),
+                    size: range.end - range.start,
+                    offset: range.start,
+                });
+            }
+            Payload::ElementSection(reader) => {
+                info.sections.push(WasmSection {
+                    name: "Element".to_string(),
+                    size: reader.range().end - reader.range().start,
+                    offset: reader.range().start,
+                });
+            }
+            Payload::CodeSectionStart { range, .. } => {
+                info.sections.push(WasmSection {
+                    name: "Code".to_string(),
+                    size: range.end - range.start,
+                    offset: range.start,
+                });
+            }
+            Payload::CodeSectionEntry(reader) => {
+                info.sections.push(WasmSection {
+                    name: "Code (Entry)".to_string(),
+                    size: reader.range().end - reader.range().start,
+                    offset: reader.range().start,
+                });
+            }
+            Payload::DataSection(reader) => {
+                info.sections.push(WasmSection {
+                    name: "Data".to_string(),
+                    size: reader.range().end - reader.range().start,
+                    offset: reader.range().start,
+                });
+            }
+            Payload::DataCountSection { range, .. } => {
+                info.sections.push(WasmSection {
+                    name: "Data Count".to_string(),
+                    size: range.end - range.start,
+                    offset: range.start,
+                });
+            }
+            Payload::CustomSection(reader) => {
+                info.sections.push(WasmSection {
+                    name: format!("Custom ({})", reader.name()),
+                    size: reader.range().end - reader.range().start,
+                    offset: reader.range().start,
+                });
             }
             _ => {}
         }
@@ -48,11 +261,65 @@ pub fn get_module_info(wasm_bytes: &[u8]) -> Result<ModuleInfo> {
 }
 
 /// Information about a WASM module.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct ModuleInfo {
+    pub total_size: usize,
     pub type_count: u32,
     pub function_count: u32,
     pub export_count: u32,
+    pub sections: Vec<WasmSection>,
+}
+
+/// Represents a single section within a WASM binary.
+#[derive(Debug, Serialize, Clone)]
+pub struct WasmSection {
+    pub name: String,
+    pub size: usize,
+    pub offset: usize,
+}
+
+// ─── wasm loading & checksum ──────────────────────────────────────────────────
+
+/// Holds the raw bytes and computed SHA-256 hash of a loaded WASM file.
+#[derive(Debug, Clone)]
+pub struct WasmFile {
+    pub bytes: Vec<u8>,
+    pub sha256_hash: String,
+}
+
+/// Computes the SHA-256 hash of the given WASM bytes.
+/// Returns the hash as a lowercase hexadecimal string.
+pub fn compute_wasm_sha256(wasm_bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(wasm_bytes);
+    hex::encode(hasher.finalize())
+}
+
+/// Reads a WASM file from disk and computes its SHA-256 checksum.
+pub fn load_wasm<P: AsRef<Path>>(path: P) -> Result<WasmFile> {
+    let path_ref = path.as_ref();
+    let bytes = fs::read(path_ref).map_err(|e| {
+        crate::DebuggerError::WasmLoadError(format!(
+            "Failed to read WASM file at {:?}: {}",
+            path_ref, e
+        ))
+    })?;
+    let sha256_hash = compute_wasm_sha256(&bytes);
+    Ok(WasmFile { bytes, sha256_hash })
+}
+
+/// Verifies that the computed hash matches the expected hash, if one is provided.
+pub fn verify_wasm_hash(computed_hash: &str, expected_hash: Option<&String>) -> Result<()> {
+    if let Some(expected) = expected_hash {
+        if expected.to_lowercase() != computed_hash {
+            return Err(crate::DebuggerError::ChecksumMismatch {
+                expected: expected.clone(),
+                actual: computed_hash.to_string(),
+            }
+            .into());
+        }
+    }
+    Ok(())
 }
 
 // ─── metadata types ───────────────────────────────────────────────────────────
@@ -138,7 +405,9 @@ pub fn extract_contract_metadata(wasm_bytes: &[u8]) -> Result<ContractMetadata> 
     let parser = Parser::new(0);
 
     for payload in parser.parse_all(wasm_bytes) {
-        let Payload::CustomSection(reader) = payload? else {
+        let Payload::CustomSection(reader) = payload
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to parse WASM: {}", e)))?
+        else {
             continue;
         };
 
@@ -226,11 +495,205 @@ pub fn extract_contract_metadata(wasm_bytes: &[u8]) -> Result<ContractMetadata> 
     Ok(metadata)
 }
 
+// ─── contract spec / function signatures ─────────────────────────────────────
+
+/// A single function parameter: name and its Soroban type as a display string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionParam {
+    pub name: String,
+    pub type_name: String,
+}
+
+/// Full signature for one exported contract function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionSignature {
+    pub name: String,
+    pub params: Vec<FunctionParam>,
+    pub return_type: Option<String>,
+}
+
+/// Convert an XDR `ScSpecTypeDef` into a human-readable type string.
+fn spec_type_to_string(ty: &stellar_xdr::curr::ScSpecTypeDef) -> String {
+    use stellar_xdr::curr::ScSpecTypeDef as T;
+    match ty {
+        T::Val => "Val".into(),
+        T::Bool => "Bool".into(),
+        T::Void => "Void".into(),
+        T::Error => "Error".into(),
+        T::U32 => "U32".into(),
+        T::I32 => "I32".into(),
+        T::U64 => "U64".into(),
+        T::I64 => "I64".into(),
+        T::Timepoint => "Timepoint".into(),
+        T::Duration => "Duration".into(),
+        T::U128 => "U128".into(),
+        T::I128 => "I128".into(),
+        T::U256 => "U256".into(),
+        T::I256 => "I256".into(),
+        T::Bytes => "Bytes".into(),
+        T::String => "String".into(),
+        T::Symbol => "Symbol".into(),
+        T::Address => "Address".into(),
+        T::Option(o) => format!("Option<{}>", spec_type_to_string(&o.value_type)),
+        T::Result(r) => format!(
+            "Result<{}, {}>",
+            spec_type_to_string(&r.ok_type),
+            spec_type_to_string(&r.error_type),
+        ),
+        T::Vec(v) => format!("Vec<{}>", spec_type_to_string(&v.element_type)),
+        T::Map(m) => format!(
+            "Map<{}, {}>",
+            spec_type_to_string(&m.key_type),
+            spec_type_to_string(&m.value_type),
+        ),
+        T::Tuple(t) => {
+            let inner: Vec<String> = t.value_types.iter().map(spec_type_to_string).collect();
+            format!("Tuple<{}>", inner.join(", "))
+        }
+        T::BytesN(b) => format!("BytesN<{}>", b.n),
+        T::Udt(u) => std::str::from_utf8(u.name.as_slice())
+            .unwrap_or("Udt")
+            .to_string(),
+    }
+}
+
+/// Helper: convert a `StringM<N>` slice to an owned `String` lossily.
+fn stringm_to_string(bytes: &[u8]) -> String {
+    std::str::from_utf8(bytes)
+        .unwrap_or("<invalid utf8>")
+        .to_string()
+}
+
+/// Parse full function signatures from the WASM `contractspecv0` custom section.
+///
+/// Returns an empty `Vec` (not an error) when no spec section is present —
+/// this keeps callers simple and backward-compatible with contracts that
+/// pre-date the spec section.
+pub fn parse_function_signatures(wasm_bytes: &[u8]) -> Result<Vec<FunctionSignature>> {
+    use stellar_xdr::curr::{Limited, Limits, ReadXdr, ScSpecEntry};
+
+    let mut signatures = Vec::new();
+    let parser = Parser::new(0);
+
+    for payload in parser.parse_all(wasm_bytes) {
+        let Payload::CustomSection(reader) = payload
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to parse WASM: {}", e)))?
+        else {
+            continue;
+        };
+
+        if reader.name() != "contractspecv0" {
+            continue;
+        }
+
+        let data = reader.data();
+        let cursor = std::io::Cursor::new(data);
+        let mut limited = Limited::new(cursor, Limits::none());
+
+        // The section is a packed sequence of XDR-encoded ScSpecEntry values.
+        loop {
+            match ScSpecEntry::read_xdr(&mut limited) {
+                Ok(ScSpecEntry::FunctionV0(func)) => {
+                    let name = stringm_to_string(func.name.0.as_slice());
+
+                    let params = func
+                        .inputs
+                        .iter()
+                        .map(|input| FunctionParam {
+                            name: stringm_to_string(input.name.as_slice()),
+                            type_name: spec_type_to_string(&input.type_),
+                        })
+                        .collect();
+
+                    let return_type = func.outputs.first().map(spec_type_to_string);
+
+                    signatures.push(FunctionSignature {
+                        name,
+                        params,
+                        return_type,
+                    });
+                }
+                Ok(_) => {
+                    // UDT definitions, events, etc. — skip
+                }
+                Err(_) => break, // end of section or corrupt data
+            }
+        }
+
+        break; // only one contractspecv0 section exists per contract
+    }
+
+    Ok(signatures)
+}
+
 // ─── tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── SHA-256 tests ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_compute_wasm_sha256_known_value() {
+        let input = b"hello world";
+        // Pre-computed SHA-256 for "hello world"
+        let expected = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+        assert_eq!(compute_wasm_sha256(input), expected);
+    }
+
+    #[test]
+    fn test_compute_wasm_sha256_empty_input() {
+        let input: &[u8] = &[];
+        let expected = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        assert_eq!(compute_wasm_sha256(input), expected);
+    }
+
+    #[test]
+    fn test_compute_wasm_sha256_deterministic() {
+        let input = b"deterministic input";
+        let hash1 = compute_wasm_sha256(input);
+        let hash2 = compute_wasm_sha256(input);
+        assert_eq!(hash1, hash2);
+    }
+
+    // ── Checksum verification tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_expected_hash_match_proceeds() {
+        let computed = "abcdef123456";
+        let expected = Some("abcdef123456".to_string());
+        // Verify no error is returned
+        assert!(verify_wasm_hash(computed, expected.as_ref()).is_ok());
+    }
+
+    #[test]
+    fn test_expected_hash_mismatch_returns_error() {
+        let computed = "abcdef123456";
+        let expected = Some("wronghash999".to_string());
+        let result = verify_wasm_hash(computed, expected.as_ref());
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        // Downcast back to DebuggerError to check the variant
+        match err.downcast_ref::<crate::DebuggerError>() {
+            Some(crate::DebuggerError::ChecksumMismatch {
+                expected: e,
+                actual: a,
+            }) => {
+                assert_eq!(e, "wronghash999");
+                assert_eq!(a, "abcdef123456");
+            }
+            _ => panic!("Expected ChecksumMismatch error"),
+        }
+    }
+
+    #[test]
+    fn test_expected_hash_none_skips_check() {
+        let computed = "abcdef123456";
+        // When None is passed, it should proceed without error
+        assert!(verify_wasm_hash(computed, None).is_ok());
+    }
 
     // ── WASM test-module builder ──────────────────────────────────────────────
 
@@ -282,6 +745,62 @@ mod tests {
         bytes.extend_from_slice(&section);
 
         bytes
+    }
+
+    fn encode_string(bytes: &mut Vec<u8>, value: &str) {
+        bytes.extend_from_slice(&uleb128(value.len()));
+        bytes.extend_from_slice(value.as_bytes());
+    }
+
+    fn append_section(module: &mut Vec<u8>, id: u8, section: &[u8]) {
+        module.push(id);
+        module.extend_from_slice(&uleb128(section.len()));
+        module.extend_from_slice(section);
+    }
+
+    fn make_wasm_with_cross_contract_call() -> Vec<u8> {
+        let mut module = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+
+        // Type section: one () -> () function type.
+        let mut ty = Vec::new();
+        ty.extend_from_slice(&uleb128(1));
+        ty.push(0x60);
+        ty.push(0x00);
+        ty.push(0x00);
+        append_section(&mut module, 1, &ty);
+
+        // Import section: import function env::invoke_contract.
+        let mut import = Vec::new();
+        import.extend_from_slice(&uleb128(1));
+        encode_string(&mut import, "env");
+        encode_string(&mut import, "invoke_contract");
+        import.push(0x00); // import kind: function
+        import.extend_from_slice(&uleb128(0)); // type index 0
+        append_section(&mut module, 2, &import);
+
+        // Function section: one local function using type index 0.
+        let mut functions = Vec::new();
+        functions.extend_from_slice(&uleb128(1));
+        functions.extend_from_slice(&uleb128(0));
+        append_section(&mut module, 3, &functions);
+
+        // Export section: export local function at index 1 (import is index 0).
+        let mut exports = Vec::new();
+        exports.extend_from_slice(&uleb128(1));
+        encode_string(&mut exports, "entrypoint");
+        exports.push(0x00); // export kind: function
+        exports.extend_from_slice(&uleb128(1));
+        append_section(&mut module, 7, &exports);
+
+        // Code section: body = call imported function index 0; end.
+        let mut code = Vec::new();
+        code.extend_from_slice(&uleb128(1)); // one body
+        let body = vec![0x00, 0x10, 0x00, 0x0b]; // no locals, call 0, end
+        code.extend_from_slice(&uleb128(body.len()));
+        code.extend_from_slice(&body);
+        append_section(&mut module, 10, &code);
+
+        module
     }
 
     // ── metadata-present tests ────────────────────────────────────────────────
@@ -365,7 +884,33 @@ implementation_notes=Line-based format
         assert!(meta.is_empty());
     }
 
-    // ── ContractMetadata::is_empty ────────────────────────────────────────────
+    #[test]
+    fn parse_cross_contract_calls_detects_invoke_contract_import() {
+        let wasm = make_wasm_with_cross_contract_call();
+        let calls = parse_cross_contract_calls(&wasm).expect("should parse calls");
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].caller, "entrypoint");
+        assert_eq!(calls[0].target, "external_contract");
+        assert_eq!(calls[0].host_function, "invoke_contract");
+    }
+
+    #[test]
+    fn test_get_module_info_with_sections() {
+        let wasm = make_custom_section_wasm("test_section", &[0x01, 0x02, 0x03]);
+        let info = get_module_info(&wasm).expect("should parse");
+
+        assert_eq!(info.total_size, wasm.len());
+        // Should have at least the custom section
+        assert!(!info.sections.is_empty());
+        let custom_section = info
+            .sections
+            .iter()
+            .find(|s| s.name.contains("test_section"));
+        assert!(custom_section.is_some());
+        // Payload size: name length byte (1) + section name bytes (12) + data bytes (3).
+        assert_eq!(custom_section.unwrap().size, 1 + 12 + 3);
+    }
 
     #[test]
     fn contract_metadata_is_empty_when_default() {

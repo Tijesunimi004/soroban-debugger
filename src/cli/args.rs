@@ -35,10 +35,29 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub verbose: bool,
 
-    #[command(subcommand)]
-    pub command: Commands,
-}
+    /// Show historical budget trend visualization
+    #[arg(long)]
+    pub budget_trend: bool,
 
+    /// Filter budget trend by contract hash
+    #[arg(long)]
+    pub trend_contract: Option<String>,
+
+    /// Filter budget trend by function name
+    #[arg(long)]
+    pub trend_function: Option<String>,
+
+    #[command(subcommand)]
+    pub command: Option<Commands>,
+
+    /// Show detailed version information
+    #[arg(long)]
+    pub version_verbose: bool,
+
+    /// Show exported functions for a given contract (shorthand for inspect --functions)
+    #[arg(long)]
+    pub list_functions: Option<PathBuf>,
+}
 impl Cli {
     /// Get the effective verbosity level
     pub fn verbosity(&self) -> Verbosity {
@@ -53,12 +72,16 @@ impl Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum Commands {
     /// Run a contract function with the debugger
     Run(RunArgs),
 
     /// Start an interactive debugging session
     Interactive(InteractiveArgs),
+
+    /// Launch the full-screen TUI dashboard
+    Tui(TuiArgs),
 
     /// Inspect contract information without executing
     Inspect(InspectArgs),
@@ -75,6 +98,21 @@ pub enum Commands {
 
     /// Compare two execution trace JSON files side-by-side
     Compare(CompareArgs),
+
+    /// Replay execution from a previously exported trace file
+    Replay(ReplayArgs),
+
+    /// Run symbolic execution to explore contract input space
+    Symbolic(SymbolicArgs),
+
+    /// Start debug server for remote connections
+    Server(ServerArgs),
+
+    /// Connect to remote debug server
+    Remote(RemoteArgs),
+
+    /// Analyze contract for security vulnerabilities
+    Analyze(AnalyzeArgs),
 }
 
 #[derive(Parser)]
@@ -82,6 +120,10 @@ pub struct RunArgs {
     /// Path to the contract WASM file
     #[arg(short, long)]
     pub contract: PathBuf,
+
+    /// Deprecated: use --contract instead
+    #[arg(long, hide = true, alias = "wasm", alias = "contract-path")]
+    pub wasm: Option<PathBuf>,
 
     /// Function name to execute
     #[arg(short, long)]
@@ -102,6 +144,10 @@ pub struct RunArgs {
     /// Network snapshot file to load before execution
     #[arg(long)]
     pub network_snapshot: Option<PathBuf>,
+
+    /// Deprecated: use --network-snapshot instead
+    #[arg(long, hide = true, alias = "snapshot")]
+    pub snapshot: Option<PathBuf>,
 
     /// Enable verbose output
     #[arg(short, long)]
@@ -131,6 +177,10 @@ pub struct RunArgs {
     #[arg(long)]
     pub repeat: Option<u32>,
 
+    /// Mock cross-contract return: CONTRACT_ID.function=return_value (repeatable)
+    #[arg(long, value_name = "CONTRACT_ID.function=return_value")]
+    pub mock: Vec<String>,
+
     /// Filter storage output by key pattern (repeatable). Supports:
     ///   prefix*       — match keys starting with prefix
     ///   re:<regex>    — match keys by regex
@@ -153,6 +203,14 @@ pub struct RunArgs {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// Export storage state to JSON file after execution
+    #[arg(long)]
+    pub export_storage: Option<PathBuf>,
+
+    /// Import storage state from JSON file before execution
+    #[arg(long)]
+    pub import_storage: Option<PathBuf>,
+
     /// Path to JSON file containing array of argument sets for batch execution
     #[arg(long)]
     pub batch_args: Option<PathBuf>,
@@ -164,6 +222,26 @@ pub struct RunArgs {
     /// Overwrite the test file if it already exists (default: append)
     #[arg(long)]
     pub overwrite: bool,
+
+    /// Execution timeout in seconds (default: 30)
+    #[arg(long, default_value = "30")]
+    pub timeout: u64,
+
+    /// Trigger a prominent alert when a critical storage key is modified (repeatable)
+    #[arg(long, value_name = "KEY_PATTERN")]
+    pub alert_on_change: Vec<String>,
+
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
+
+    /// Show ledger entries accessed during execution
+    #[arg(long)]
+    pub show_ledger: bool,
+
+    /// TTL warning threshold in ledger sequence numbers (default: 1000)
+    #[arg(long, default_value = "1000")]
+    pub ttl_warning_threshold: u32,
 }
 
 impl RunArgs {
@@ -202,9 +280,21 @@ pub struct InteractiveArgs {
     #[arg(short, long)]
     pub contract: PathBuf,
 
+    /// Deprecated: use --contract instead
+    #[arg(long, hide = true, alias = "wasm", alias = "contract-path")]
+    pub wasm: Option<PathBuf>,
+
     /// Network snapshot file to load before starting interactive session
     #[arg(long)]
     pub network_snapshot: Option<PathBuf>,
+
+    /// Deprecated: use --network-snapshot instead
+    #[arg(long, hide = true, alias = "snapshot")]
+    pub snapshot: Option<PathBuf>,
+
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
 }
 
 impl InteractiveArgs {
@@ -214,10 +304,20 @@ impl InteractiveArgs {
 }
 
 #[derive(Parser)]
+pub struct CompletionsArgs {
+    /// Shell to generate completion script for
+    #[arg(value_enum)]
+    pub shell: Shell,
+}
+#[derive(Parser)]
 pub struct InspectArgs {
     /// Path to the contract WASM file
     #[arg(short, long)]
     pub contract: PathBuf,
+
+    /// Deprecated: use --contract instead
+    #[arg(long, hide = true, alias = "wasm", alias = "contract-path")]
+    pub wasm: Option<PathBuf>,
 
     /// Show exported functions
     #[arg(long)]
@@ -226,6 +326,14 @@ pub struct InspectArgs {
     /// Show contract metadata
     #[arg(long)]
     pub metadata: bool,
+
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
+
+    /// Show cross-contract dependency graph in DOT and Mermaid formats
+    #[arg(long)]
+    pub dependency_graph: bool,
 }
 
 #[derive(Parser)]
@@ -233,6 +341,10 @@ pub struct OptimizeArgs {
     /// Path to the contract WASM file
     #[arg(short, long)]
     pub contract: PathBuf,
+
+    /// Deprecated: use --contract instead
+    #[arg(long, hide = true, alias = "wasm", alias = "contract-path")]
+    pub wasm: Option<PathBuf>,
 
     /// Function name to analyze (can be specified multiple times)
     #[arg(short, long)]
@@ -253,6 +365,14 @@ pub struct OptimizeArgs {
     /// Network snapshot file to load before analysis
     #[arg(long)]
     pub network_snapshot: Option<PathBuf>,
+
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
+
+    /// Deprecated: use --network-snapshot instead
+    #[arg(long, hide = true, alias = "snapshot")]
+    pub snapshot: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -293,11 +413,32 @@ pub struct CompareArgs {
     pub output: Option<PathBuf>,
 }
 
+/// Arguments for the TUI dashboard subcommand
 #[derive(Parser)]
-pub struct CompletionsArgs {
-    /// Shell to generate completion script for
-    #[arg(value_enum)]
-    pub shell: Shell,
+pub struct TuiArgs {
+    /// Path to the contract WASM file
+    #[arg(short, long)]
+    pub contract: PathBuf,
+
+    /// Function name to execute inside the TUI
+    #[arg(short, long)]
+    pub function: String,
+
+    /// Function arguments as JSON array (e.g., '["arg1", "arg2"]')
+    #[arg(short, long)]
+    pub args: Option<String>,
+
+    /// Initial storage state as JSON object
+    #[arg(short, long)]
+    pub storage: Option<String>,
+
+    /// Set breakpoints at function names
+    #[arg(short, long)]
+    pub breakpoint: Vec<String>,
+
+    /// Network snapshot file to load before execution
+    #[arg(long)]
+    pub network_snapshot: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -305,6 +446,10 @@ pub struct ProfileArgs {
     /// Path to the contract WASM file
     #[arg(short, long)]
     pub contract: PathBuf,
+
+    /// Deprecated: use --contract instead
+    #[arg(long, hide = true, alias = "wasm", alias = "contract-path")]
+    pub wasm: Option<PathBuf>,
 
     /// Function name to execute
     #[arg(short, long)]
@@ -321,4 +466,110 @@ pub struct ProfileArgs {
     /// Initial storage state as JSON object
     #[arg(short, long)]
     pub storage: Option<String>,
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
+}
+
+#[derive(Parser)]
+pub struct SymbolicArgs {
+    /// Path to the contract WASM file
+    #[arg(short, long)]
+    pub contract: PathBuf,
+
+    /// Function name to execute
+    #[arg(short, long)]
+    pub function: String,
+
+    /// Output file for the scenario TOML
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+pub struct ReplayArgs {
+    /// Path to the trace JSON file to replay
+    #[arg(value_name = "TRACE_FILE")]
+    pub trace_file: PathBuf,
+
+    /// Path to the contract WASM file (optional, defaults to trace file's contract path)
+    #[arg(short, long)]
+    pub contract: Option<PathBuf>,
+
+    /// Stop replay at step N (0-based index into call sequence)
+    #[arg(long)]
+    pub replay_until: Option<usize>,
+
+    /// Output file for the diff report (default: stdout)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Show verbose output during replay
+    #[arg(short, long)]
+    pub verbose: bool,
+}
+
+#[derive(Parser)]
+pub struct ServerArgs {
+    /// Port to listen on
+    #[arg(short, long, default_value = "9229")]
+    pub port: u16,
+
+    /// Authentication token (optional, if not provided no auth required)
+    #[arg(short, long)]
+    pub token: Option<String>,
+
+    /// TLS certificate file path (optional)
+    #[arg(long)]
+    pub tls_cert: Option<PathBuf>,
+
+    /// TLS private key file path (optional)
+    #[arg(long)]
+    pub tls_key: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+pub struct RemoteArgs {
+    /// Remote server address (e.g., localhost:9229)
+    #[arg(short, long)]
+    pub remote: String,
+
+    /// Authentication token (if required by server)
+    #[arg(short, long)]
+    pub token: Option<String>,
+
+    /// Path to the contract WASM file
+    #[arg(short, long)]
+    pub contract: Option<PathBuf>,
+
+    /// Function name to execute
+    #[arg(short, long)]
+    pub function: Option<String>,
+
+    /// Function arguments as JSON array
+    #[arg(short, long)]
+    pub args: Option<String>,
+}
+
+#[derive(Parser)]
+pub struct AnalyzeArgs {
+    /// Path to the contract WASM file
+    #[arg(short, long)]
+    pub contract: PathBuf,
+
+    /// Function name to execute for dynamic analysis (optional)
+    #[arg(short, long)]
+    pub function: Option<String>,
+
+    /// Function arguments as JSON array for dynamic analysis (optional)
+    #[arg(short, long)]
+    pub args: Option<String>,
+
+    /// Initial storage state as JSON object (optional)
+    #[arg(short, long)]
+    pub storage: Option<String>,
+
+    /// Output format (text, json)
+    #[arg(long, default_value = "text")]
+    pub format: String,
 }

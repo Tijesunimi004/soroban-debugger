@@ -89,16 +89,19 @@ impl ExecutionTrace {
     /// Load an execution trace from a JSON file.
     pub fn from_file<P: AsRef<Path>>(path: P) -> crate::Result<Self> {
         let path = path.as_ref();
-        let contents = fs::read_to_string(path)
-            .map_err(|e| anyhow::anyhow!("Failed to read trace file {:?}: {}", path, e))?;
-        let trace: ExecutionTrace = serde_json::from_str(&contents)
-            .map_err(|e| anyhow::anyhow!("Failed to parse trace file {:?}: {}", path, e))?;
+        let contents = fs::read_to_string(path).map_err(|e| {
+            crate::DebuggerError::FileError(format!("Failed to read trace file {:?}: {}", path, e))
+        })?;
+        let trace: ExecutionTrace = serde_json::from_str(&contents).map_err(|e| {
+            crate::DebuggerError::FileError(format!("Failed to parse trace file {:?}: {}", path, e))
+        })?;
         Ok(trace)
     }
 
     /// Serialize this trace to a pretty-printed JSON string.
     pub fn to_json(&self) -> crate::Result<String> {
-        serde_json::to_string_pretty(self)
-            .map_err(|e| anyhow::anyhow!("Failed to serialize trace: {}", e))
+        Ok(serde_json::to_string_pretty(self).map_err(|e| {
+            crate::DebuggerError::FileError(format!("Failed to serialize trace: {}", e))
+        })?)
     }
 }
