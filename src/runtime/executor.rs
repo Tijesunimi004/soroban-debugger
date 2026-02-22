@@ -28,6 +28,8 @@ pub struct StorageSnapshot {
     _contract_address: Address,
 }
 
+use crate::debugger::error_db::ErrorDatabase;
+
 /// Executes Soroban contracts in a test environment.
 pub struct ContractExecutor {
     env: Env,
@@ -36,6 +38,7 @@ pub struct ContractExecutor {
     mock_registry: Arc<Mutex<MockRegistry>>,
     wasm_bytes: Vec<u8>,
     timeout_secs: u64,
+    error_db: ErrorDatabase,
 }
 
 impl ContractExecutor {
@@ -74,6 +77,10 @@ impl ContractExecutor {
 
         let contract_address = env.register(wasm.as_slice(), ());
 
+        let mut error_db = ErrorDatabase::new();
+        if let Err(e) = error_db.load_custom_errors_from_wasm(&wasm) {
+            warn!("Failed to load custom errors from spec: {}", e);
+        }
         // Complete the progress bar
         _guard.0.set_position(100);
         _guard.0.set_message("Contract loaded successfully");
@@ -85,6 +92,7 @@ impl ContractExecutor {
             mock_registry: Arc::new(Mutex::new(MockRegistry::default())),
             wasm_bytes: wasm,
             timeout_secs: 30,
+            error_db,
         })
     }
 
@@ -225,6 +233,7 @@ impl ContractExecutor {
                 let err_msg = match inv_err {
                     InvokeError::Contract(code) => {
                         warn!("Contract returned error code: {}", code);
+                        self.error_db.display_error(*code);
                         format!("The contract returned an error code: {}. This typically indicates a business logic failure (e.g. `panic!` or `require!`).", code)
                     }
                     InvokeError::Abort => {
