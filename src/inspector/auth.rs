@@ -1,4 +1,4 @@
-use crate::Result;
+use crate::{DebuggerError, Result};
 use serde::{Deserialize, Serialize};
 use soroban_sdk::{
     testutils::{AuthorizedFunction, AuthorizedInvocation},
@@ -101,6 +101,8 @@ impl AuthInspector {
 
     /// Return the authorization tree as a JSON string
     pub fn to_json(nodes: &[AuthNode]) -> Result<String> {
-        Ok(serde_json::to_string_pretty(nodes)?)
+        Ok(serde_json::to_string_pretty(nodes).map_err(|e| {
+            DebuggerError::FileError(format!("Failed to serialize auth nodes: {}", e))
+        })?)
     }
 }

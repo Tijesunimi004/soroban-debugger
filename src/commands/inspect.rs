@@ -19,12 +19,24 @@ const BAR_WIDTH: usize = 54;
 
 /// CLI entry point for the `inspect` sub-command.
 pub fn run(args: &InspectArgs) -> Result<()> {
-    let wasm_bytes = fs::read(&args.contract).map_err(|e| {
+    let wasm_file = crate::utils::wasm::load_wasm(&args.contract).map_err(|e| {
         anyhow::anyhow!(
             "Cannot read WASM file '{}': {e}",
             args.contract.display()
         )
     })?;
+    let wasm_bytes = wasm_file.bytes;
+    let wasm_hash = wasm_file.sha256_hash;
+
+    if let Some(expected) = &args.expected_hash {
+        if expected.to_lowercase() != wasm_hash {
+            return Err(crate::DebuggerError::ChecksumMismatch {
+                expected: expected.clone(),
+                actual: wasm_hash.clone(),
+            }
+            .into());
+        }
+    }
 
     if args.json {
         print_json_report(&args.contract, &wasm_bytes)

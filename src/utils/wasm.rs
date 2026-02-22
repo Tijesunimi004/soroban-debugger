@@ -1,7 +1,9 @@
-use crate::Result;
+use crate::{DebuggerError, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::fs;
+use std::path::Path;
 use wasmparser::{Parser, Payload};
-
 // ─── existing public API (unchanged) ─────────────────────────────────────────
 
 /// Compute the SHA-256 checksum of a WASM binary.
@@ -18,9 +20,13 @@ pub fn parse_functions(wasm_bytes: &[u8]) -> Result<Vec<String>> {
     let parser = Parser::new(0);
 
     for payload in parser.parse_all(wasm_bytes) {
-        if let Payload::ExportSection(reader) = payload? {
+        if let Payload::ExportSection(reader) = payload
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to parse WASM: {}", e)))?
+        {
             for export in reader {
-                let export = export?;
+                let export = export.map_err(|e| {
+                    DebuggerError::WasmLoadError(format!("Failed to read export: {}", e))
+                })?;
                 if matches!(export.kind, wasmparser::ExternalKind::Func) {
                     functions.push(export.name.to_string());
                 }
@@ -70,10 +76,14 @@ pub fn parse_cross_contract_calls(wasm_bytes: &[u8]) -> Result<Vec<CrossContract
     let mut dedupe = BTreeSet::new();
 
     for payload in Parser::new(0).parse_all(wasm_bytes) {
-        match payload? {
+        match payload
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to parse WASM: {}", e)))?
+        {
             Payload::ImportSection(reader) => {
                 for import in reader {
-                    let import = import?;
+                    let import = import.map_err(|e| {
+                        DebuggerError::WasmLoadError(format!("Failed to read import: {}", e))
+                    })?;
                     if let wasmparser::TypeRef::Func(_) = import.ty {
                         let current_index = imported_func_count;
                         imported_func_count += 1;
@@ -85,7 +95,9 @@ pub fn parse_cross_contract_calls(wasm_bytes: &[u8]) -> Result<Vec<CrossContract
             }
             Payload::ExportSection(reader) => {
                 for export in reader {
-                    let export = export?;
+                    let export = export.map_err(|e| {
+                        DebuggerError::WasmLoadError(format!("Failed to read export: {}", e))
+                    })?;
                     if matches!(export.kind, wasmparser::ExternalKind::Func) {
                         export_names.insert(export.index, export.name.to_string());
                     }
@@ -99,9 +111,13 @@ pub fn parse_cross_contract_calls(wasm_bytes: &[u8]) -> Result<Vec<CrossContract
                     .cloned()
                     .unwrap_or_else(|| format!("func_{current_fn_index}"));
 
-                let mut reader = body.get_operators_reader()?;
+                let mut reader = body.get_operators_reader().map_err(|e| {
+                    DebuggerError::WasmLoadError(format!("Failed to get operators reader: {}", e))
+                })?;
                 while !reader.eof() {
-                    if let Operator::Call { function_index } = reader.read()? {
+                    if let Operator::Call { function_index } = reader.read().map_err(|e| {
+                        DebuggerError::WasmLoadError(format!("Failed to read operator: {}", e))
+                    })? {
                         if let Some(host_fn_name) = cross_contract_imports.get(&function_index) {
                             let target = map_import_to_target(host_fn_name);
                             let key = format!("{caller}->{target}:{host_fn_name}");
@@ -132,7 +148,8 @@ pub fn get_module_info(wasm_bytes: &[u8]) -> Result<ModuleInfo> {
     let parser = Parser::new(0);
 
     for payload in parser.parse_all(wasm_bytes) {
-        let payload = payload?;
+        let payload = payload
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to parse WASM: {}", e)))?;
         match &payload {
             Payload::Version { .. } => {}
             Payload::TypeSection(reader) => {
@@ -261,6 +278,50 @@ pub struct WasmSection {
     pub offset: usize,
 }
 
+// ─── wasm loading & checksum ──────────────────────────────────────────────────
+
+/// Holds the raw bytes and computed SHA-256 hash of a loaded WASM file.
+#[derive(Debug, Clone)]
+pub struct WasmFile {
+    pub bytes: Vec<u8>,
+    pub sha256_hash: String,
+}
+
+/// Computes the SHA-256 hash of the given WASM bytes.
+/// Returns the hash as a lowercase hexadecimal string.
+pub fn compute_wasm_sha256(wasm_bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(wasm_bytes);
+    hex::encode(hasher.finalize())
+}
+
+/// Reads a WASM file from disk and computes its SHA-256 checksum.
+pub fn load_wasm<P: AsRef<Path>>(path: P) -> Result<WasmFile> {
+    let path_ref = path.as_ref();
+    let bytes = fs::read(path_ref).map_err(|e| {
+        crate::DebuggerError::WasmLoadError(format!(
+            "Failed to read WASM file at {:?}: {}",
+            path_ref, e
+        ))
+    })?;
+    let sha256_hash = compute_wasm_sha256(&bytes);
+    Ok(WasmFile { bytes, sha256_hash })
+}
+
+/// Verifies that the computed hash matches the expected hash, if one is provided.
+pub fn verify_wasm_hash(computed_hash: &str, expected_hash: Option<&String>) -> Result<()> {
+    if let Some(expected) = expected_hash {
+        if expected.to_lowercase() != computed_hash {
+            return Err(crate::DebuggerError::ChecksumMismatch {
+                expected: expected.clone(),
+                actual: computed_hash.to_string(),
+            }
+            .into());
+        }
+    }
+    Ok(())
+}
+
 // ─── metadata types ───────────────────────────────────────────────────────────
 
 /// High-level contract metadata extracted from WASM custom sections.
@@ -344,7 +405,9 @@ pub fn extract_contract_metadata(wasm_bytes: &[u8]) -> Result<ContractMetadata> 
     let parser = Parser::new(0);
 
     for payload in parser.parse_all(wasm_bytes) {
-        let Payload::CustomSection(reader) = payload? else {
+        let Payload::CustomSection(reader) = payload
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to parse WASM: {}", e)))?
+        else {
             continue;
         };
 
@@ -513,7 +576,9 @@ pub fn parse_function_signatures(wasm_bytes: &[u8]) -> Result<Vec<FunctionSignat
     let parser = Parser::new(0);
 
     for payload in parser.parse_all(wasm_bytes) {
-        let Payload::CustomSection(reader) = payload? else {
+        let Payload::CustomSection(reader) = payload
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to parse WASM: {}", e)))?
+        else {
             continue;
         };
 
@@ -566,6 +631,69 @@ pub fn parse_function_signatures(wasm_bytes: &[u8]) -> Result<Vec<FunctionSignat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── SHA-256 tests ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_compute_wasm_sha256_known_value() {
+        let input = b"hello world";
+        // Pre-computed SHA-256 for "hello world"
+        let expected = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+        assert_eq!(compute_wasm_sha256(input), expected);
+    }
+
+    #[test]
+    fn test_compute_wasm_sha256_empty_input() {
+        let input: &[u8] = &[];
+        let expected = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        assert_eq!(compute_wasm_sha256(input), expected);
+    }
+
+    #[test]
+    fn test_compute_wasm_sha256_deterministic() {
+        let input = b"deterministic input";
+        let hash1 = compute_wasm_sha256(input);
+        let hash2 = compute_wasm_sha256(input);
+        assert_eq!(hash1, hash2);
+    }
+
+    // ── Checksum verification tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_expected_hash_match_proceeds() {
+        let computed = "abcdef123456";
+        let expected = Some("abcdef123456".to_string());
+        // Verify no error is returned
+        assert!(verify_wasm_hash(computed, expected.as_ref()).is_ok());
+    }
+
+    #[test]
+    fn test_expected_hash_mismatch_returns_error() {
+        let computed = "abcdef123456";
+        let expected = Some("wronghash999".to_string());
+        let result = verify_wasm_hash(computed, expected.as_ref());
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        // Downcast back to DebuggerError to check the variant
+        match err.downcast_ref::<crate::DebuggerError>() {
+            Some(crate::DebuggerError::ChecksumMismatch {
+                expected: e,
+                actual: a,
+            }) => {
+                assert_eq!(e, "wronghash999");
+                assert_eq!(a, "abcdef123456");
+            }
+            _ => panic!("Expected ChecksumMismatch error"),
+        }
+    }
+
+    #[test]
+    fn test_expected_hash_none_skips_check() {
+        let computed = "abcdef123456";
+        // When None is passed, it should proceed without error
+        assert!(verify_wasm_hash(computed, None).is_ok());
+    }
 
     // ── WASM test-module builder ──────────────────────────────────────────────
 

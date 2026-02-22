@@ -157,10 +157,7 @@ impl LedgerEntryInspector {
             );
 
             // Table header
-            println!(
-                "  {:<30} | {:<8} | {:<10} | {}",
-                "Key", "Access", "TTL", "Value"
-            );
+            println!("  {:<30} | {:<8} | {:<10} | Value", "Key", "Access", "TTL");
             println!("  {:-<30}-+-{:-<8}-+-{:-<10}-+-{:-<30}", "", "", "", "");
 
             for entry in &entries {

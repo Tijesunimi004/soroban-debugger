@@ -82,7 +82,7 @@ Execution timeout in seconds (default: 30)
 Trigger a prominent alert when a critical storage key is modified (repeatable)
 .TP
 \fB\-\-expected\-hash\fR \fI<EXPECTED_HASH>\fR
-Expected SHA\-256 hash of the WASM file
+Expected SHA\-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match
 .TP
 \fB\-\-show\-ledger\fR
 Show ledger entries accessed during execution

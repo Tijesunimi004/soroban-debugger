@@ -83,10 +83,17 @@ impl UpgradeAnalyzer {
         let mut exports = Vec::new();
 
         for payload in parser.parse_all(wasm_bytes) {
-            match payload? {
+            match payload.map_err(|e| {
+                crate::DebuggerError::WasmLoadError(format!("Failed to parse WASM: {}", e))
+            })? {
                 Payload::TypeSection(reader) => {
                     for rec_group in reader {
-                        let rec_group = rec_group?;
+                        let rec_group = rec_group.map_err(|e| {
+                            crate::DebuggerError::WasmLoadError(format!(
+                                "Failed to read type section: {}",
+                                e
+                            ))
+                        })?;
                         for ty in rec_group.types() {
                             if let wasmparser::CompositeType::Func(func_type) = &ty.composite_type {
                                 type_definitions.push(func_type.clone());
@@ -96,12 +103,22 @@ impl UpgradeAnalyzer {
                 }
                 Payload::FunctionSection(reader) => {
                     for type_idx in reader {
-                        function_types.push(type_idx?);
+                        function_types.push(type_idx.map_err(|e| {
+                            crate::DebuggerError::WasmLoadError(format!(
+                                "Failed to read function section: {}",
+                                e
+                            ))
+                        })?);
                     }
                 }
                 Payload::ExportSection(reader) => {
                     for export in reader {
-                        let export = export?;
+                        let export = export.map_err(|e| {
+                            crate::DebuggerError::WasmLoadError(format!(
+                                "Failed to read export section: {}",
+                                e
+                            ))
+                        })?;
                         if let wasmparser::ExternalKind::Func = export.kind {
                             exports.push((export.name.to_string(), export.index));
                         }

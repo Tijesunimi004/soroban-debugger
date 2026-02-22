@@ -99,11 +99,6 @@ impl ContractExecutor {
             &func_symbol,
             args_vec,
         ) {
-            Ok(Ok(val)) => Ok(format!("{:?}", val)),
-            Ok(Err(conv_err)) => Err(DebuggerError::ExecutionError(format!(
-                "Return value conversion failed: {:?}",
-                conv_err
-            ))),
             Ok(Ok(val)) => {
                 info!("Function executed successfully");
                 Ok(format!("{:?}", val))
@@ -113,8 +108,7 @@ impl ContractExecutor {
                 Err(DebuggerError::ExecutionError(format!(
                     "Return value conversion failed: {:?}",
                     conv_err
-                ))
-                .into())
+                )))
             }
             Err(Ok(inv_err)) => match inv_err {
                 InvokeError::Contract(code) => {
@@ -146,7 +140,7 @@ impl ContractExecutor {
         // Display budget usage and warnings
         crate::inspector::BudgetInspector::display(self.env.host());
 
-        res
+        Ok(res?)
     }
 
     /// Set initial storage state.
@@ -210,7 +204,10 @@ impl ContractExecutor {
         Ok(self
             .env
             .host()
-            .get_diagnostic_events()?
+            .get_diagnostic_events()
+            .map_err(|e| {
+                DebuggerError::ExecutionError(format!("Failed to get diagnostic events: {}", e))
+            })?
             .0
             .into_iter()
             .map(|he| he.event)
@@ -243,12 +240,17 @@ impl ContractExecutor {
                     .boxed();
             self.env
                 .host()
-                .register_test_contract(address.to_object(), dispatcher)?;
+                .register_test_contract(address.to_object(), dispatcher)
+                .map_err(|e| {
+                    DebuggerError::ExecutionError(format!(
+                        "Failed to register test contract: {}",
+                        e
+                    ))
+                })?;
         }
 
         Ok(())
     }
-
     fn parse_contract_address(&self, contract_id: &str) -> Result<Address> {
         let parsed = catch_unwind(AssertUnwindSafe(|| {
             Address::from_str(&self.env, contract_id)

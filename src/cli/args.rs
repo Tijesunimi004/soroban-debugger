@@ -104,6 +104,12 @@ pub enum Commands {
 
     /// Run symbolic execution to explore contract input space
     Symbolic(SymbolicArgs),
+
+    /// Start debug server for remote connections
+    Server(ServerArgs),
+
+    /// Connect to remote debug server
+    Remote(RemoteArgs),
 }
 
 #[derive(Parser)]
@@ -214,7 +220,7 @@ pub struct RunArgs {
     #[arg(long, value_name = "KEY_PATTERN")]
     pub alert_on_change: Vec<String>,
 
-    /// Expected SHA-256 hash of the WASM file
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
     #[arg(long)]
     pub expected_hash: Option<String>,
 
@@ -274,6 +280,10 @@ pub struct InteractiveArgs {
     /// Deprecated: use --network-snapshot instead
     #[arg(long, hide = true, alias = "snapshot")]
     pub snapshot: Option<PathBuf>,
+
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
 }
 
 impl InteractiveArgs {
@@ -305,6 +315,10 @@ pub struct InspectArgs {
     /// Show contract metadata
     #[arg(long)]
     pub metadata: bool,
+
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
 
     /// Show cross-contract dependency graph in DOT and Mermaid formats
     #[arg(long)]
@@ -340,6 +354,10 @@ pub struct OptimizeArgs {
     /// Network snapshot file to load before analysis
     #[arg(long)]
     pub network_snapshot: Option<PathBuf>,
+
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
 
     /// Deprecated: use --network-snapshot instead
     #[arg(long, hide = true, alias = "snapshot")]
@@ -437,6 +455,9 @@ pub struct ProfileArgs {
     /// Initial storage state as JSON object
     #[arg(short, long)]
     pub storage: Option<String>,
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
 }
 
 #[derive(Parser)]
@@ -475,4 +496,46 @@ pub struct ReplayArgs {
     /// Show verbose output during replay
     #[arg(short, long)]
     pub verbose: bool,
+}
+
+#[derive(Parser)]
+pub struct ServerArgs {
+    /// Port to listen on
+    #[arg(short, long, default_value = "9229")]
+    pub port: u16,
+
+    /// Authentication token (optional, if not provided no auth required)
+    #[arg(short, long)]
+    pub token: Option<String>,
+
+    /// TLS certificate file path (optional)
+    #[arg(long)]
+    pub tls_cert: Option<PathBuf>,
+
+    /// TLS private key file path (optional)
+    #[arg(long)]
+    pub tls_key: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+pub struct RemoteArgs {
+    /// Remote server address (e.g., localhost:9229)
+    #[arg(short, long)]
+    pub remote: String,
+
+    /// Authentication token (if required by server)
+    #[arg(short, long)]
+    pub token: Option<String>,
+
+    /// Path to the contract WASM file
+    #[arg(short, long)]
+    pub contract: Option<PathBuf>,
+
+    /// Function name to execute
+    #[arg(short, long)]
+    pub function: Option<String>,
+
+    /// Function arguments as JSON array
+    #[arg(short, long)]
+    pub args: Option<String>,
 }

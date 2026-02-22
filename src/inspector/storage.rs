@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::{DebuggerError, Result};
 use crossterm::style::{Color, Stylize};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -33,17 +33,31 @@ impl StorageState {
         let state = StorageState {
             entries: entries.clone(),
         };
-        let json =
-            serde_json::to_string_pretty(&state).context("Failed to serialize storage state")?;
-        fs::write(path.as_ref(), json).context("Failed to write storage file")?;
+        let json = serde_json::to_string_pretty(&state).map_err(|e| {
+            DebuggerError::StorageError(format!("Failed to serialize storage state: {}", e))
+        })?;
+        fs::write(path.as_ref(), json).map_err(|e| {
+            DebuggerError::FileError(format!(
+                "Failed to write storage file {:?}: {}",
+                path.as_ref(),
+                e
+            ))
+        })?;
         Ok(())
     }
 
     /// Import storage state from JSON file
     pub fn import_from_file<P: AsRef<Path>>(path: P) -> Result<HashMap<String, String>> {
-        let contents = fs::read_to_string(path.as_ref()).context("Failed to read storage file")?;
-        let state: StorageState =
-            serde_json::from_str(&contents).context("Failed to parse storage JSON")?;
+        let contents = fs::read_to_string(path.as_ref()).map_err(|e| {
+            DebuggerError::FileError(format!(
+                "Failed to read storage file {:?}: {}",
+                path.as_ref(),
+                e
+            ))
+        })?;
+        let state: StorageState = serde_json::from_str(&contents).map_err(|e| {
+            DebuggerError::StorageError(format!("Failed to parse storage JSON: {}", e))
+        })?;
         Ok(state.entries)
     }
 }
@@ -54,7 +68,7 @@ impl FilterPattern {
     /// - `re:<pattern>` → Regex filter
     /// - `<prefix>*` → Prefix filter (trailing `*`)
     /// - `<exact>` → Exact match
-    pub fn parse(pattern: &str) -> Result<Self, String> {
+    pub fn parse(pattern: &str) -> std::result::Result<Self, String> {
         if let Some(regex_str) = pattern.strip_prefix("re:") {
             let regex = Regex::new(regex_str)
                 .map_err(|e| format!("Invalid regex pattern '{}': {}", regex_str, e))?;
@@ -84,8 +98,8 @@ pub struct StorageFilter {
 
 impl StorageFilter {
     /// Create a new storage filter from a list of pattern strings
-    pub fn new(patterns: &[String]) -> Result<Self, String> {
-        let parsed: Result<Vec<FilterPattern>, String> =
+    pub fn new(patterns: &[String]) -> std::result::Result<Self, String> {
+        let parsed: std::result::Result<Vec<FilterPattern>, String> =
             patterns.iter().map(|p| FilterPattern::parse(p)).collect();
         Ok(Self { patterns: parsed? })
     }

@@ -68,11 +68,7 @@ impl OutputConfig {
 
     /// Horizontal rule character(s) for section separators.
     pub fn rule_char() -> &'static str {
-        if Self::no_unicode() {
-            "-"
-        } else {
-            "-"
-        }
+        "-"
     }
 
     /// Double-line rule character for headers.
@@ -122,9 +118,5 @@ impl StatusLabel {
 
 /// Spinner / progress: in no-unicode or accessibility mode, return static text instead of Unicode spinner.
 pub fn spinner_text() -> &'static str {
-    if OutputConfig::no_unicode() {
-        "[WORKING...]"
-    } else {
-        "[WORKING...]"
-    }
+    "[WORKING...]"
 }

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::{Result, DebuggerError};
 use gimli::{Dwarf, EndianSlice, RunTimeEndian};
 use object::{Object, ObjectSection};
 use std::collections::{BTreeMap, HashMap};
@@ -32,7 +32,8 @@ impl SourceMap {
 
     /// Load debug info from WASM bytes and build the mapping
     pub fn load(&mut self, wasm_bytes: &[u8]) -> Result<()> {
-        let obj = object::File::parse(wasm_bytes).context("Failed to parse WASM object file")?;
+        let obj = object::File::parse(wasm_bytes)
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to parse WASM object file: {}", e)))?;
 
         let load_section =
             |id: gimli::SectionId| -> Result<EndianSlice<RunTimeEndian>, gimli::Error> {
@@ -60,14 +61,18 @@ impl SourceMap {
                 ))
             };
 
-        let dwarf = Dwarf::load(&load_section).context("Failed to load DWARF sections")?;
+        let dwarf = Dwarf::load(&load_section)
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to load DWARF sections: {}", e)))?;
 
         let mut units = dwarf.units();
-        while let Some(header) = units.next()? {
-            let unit = dwarf.unit(header)?;
+        while let Some(header) = units.next()
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to read DWARF unit: {}", e)))? {
+            let unit = dwarf.unit(header)
+                .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to load DWARF unit: {}", e)))?;
             if let Some(program) = unit.line_program.clone() {
                 let mut rows = program.rows();
-                while let Some((header, row)) = rows.next_row()? {
+                while let Some((header, row)) = rows.next_row()
+                    .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to read DWARF line row: {}", e)))? {
                     if let Some(file_path) =
                         self.get_file_path(&dwarf, &unit, header, row.file_index())
                     {

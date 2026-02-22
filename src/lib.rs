@@ -1,6 +1,7 @@
 pub mod analyzer;
 pub mod batch;
 pub mod cli;
+pub mod client;
 pub mod codegen;
 pub mod compare;
 pub mod config;
@@ -8,9 +9,12 @@ pub mod debugger;
 pub mod history;
 pub mod inspector;
 pub mod logging;
+pub mod output;
+pub mod plugin;
 pub mod profiler;
 pub mod repeat;
 pub mod runtime;
+pub mod server;
 pub mod simulator;
 pub mod ui;
 pub mod utils;
@@ -66,6 +70,9 @@ pub enum DebuggerError {
         help("Ensure the storage snapshot file is valid JSON and accessible.")
     )]
     StorageError(String),
+
+    #[error("WASM checksum mismatch.\n  Expected : {expected}\n  Computed : {actual}")]
+    ChecksumMismatch { expected: String, actual: String },
 
     #[error("File operation failed: {0}")]
     #[diagnostic(
