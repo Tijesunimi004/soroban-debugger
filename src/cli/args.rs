@@ -80,6 +80,9 @@ pub enum Commands {
     /// Start an interactive debugging session
     Interactive(InteractiveArgs),
 
+    /// Start an interactive REPL for contract exploration
+    Repl(ReplArgs),
+
     /// Launch the full-screen TUI dashboard
     Tui(TuiArgs),
 
@@ -300,6 +303,39 @@ pub struct InteractiveArgs {
 impl InteractiveArgs {
     pub fn merge_config(&mut self, _config: &Config) {
         // Future interactive-specific config could go here
+    }
+}
+
+#[derive(Parser)]
+pub struct ReplArgs {
+    /// Path to the contract WASM file
+    #[arg(short, long)]
+    pub contract: PathBuf,
+
+    /// Deprecated: use --contract instead
+    #[arg(long, hide = true, alias = "wasm", alias = "contract-path")]
+    pub wasm: Option<PathBuf>,
+
+    /// Network snapshot file to load before starting REPL session
+    #[arg(long)]
+    pub network_snapshot: Option<PathBuf>,
+
+    /// Deprecated: use --network-snapshot instead
+    #[arg(long, hide = true, alias = "snapshot")]
+    pub snapshot: Option<PathBuf>,
+
+    /// Initial storage state as JSON object
+    #[arg(short, long)]
+    pub storage: Option<String>,
+
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
+}
+
+impl ReplArgs {
+    pub fn merge_config(&mut self, _config: &Config) {
+        // Future REPL-specific config could go here
     }
 }
 

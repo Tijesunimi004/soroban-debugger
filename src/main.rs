@@ -100,6 +100,21 @@ fn handle_deprecations(cli: &mut Cli) {
                 args.contract = wasm;
             }
         }
+        Some(Commands::Repl(args)) => {
+            if let Some(wasm) = args.wasm.take() {
+                eprintln!("{}", Formatter::warning("Warning: --wasm and --contract-path are deprecated. Please use --contract instead."));
+                args.contract = wasm;
+            }
+            if let Some(snapshot) = args.snapshot.take() {
+                eprintln!(
+                    "{}",
+                    Formatter::warning(
+                        "Warning: --snapshot is deprecated. Please use --network-snapshot instead."
+                    )
+                );
+                args.network_snapshot = Some(snapshot);
+            }
+        }
         _ => {}
     }
 }
@@ -146,6 +161,13 @@ fn main() -> miette::Result<()> {
         Some(Commands::Server(args)) => soroban_debugger::cli::commands::server(args),
         Some(Commands::Remote(args)) => soroban_debugger::cli::commands::remote(args, verbosity),
         Some(Commands::Analyze(args)) => soroban_debugger::cli::commands::analyze(args, verbosity),
+        Some(Commands::Repl(mut args)) => {
+            args.merge_config(&config);
+            tokio::runtime::Runtime::new()
+                .map_err(|e| miette::miette!(e))?
+                .block_on(soroban_debugger::cli::commands::repl(args))
+                .map_err(|e| miette::miette!(e))
+        }
         None => {
             if let Some(path) = cli.list_functions {
                 return soroban_debugger::cli::commands::inspect(

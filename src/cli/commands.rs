@@ -1,6 +1,6 @@
 use crate::cli::args::{
     AnalyzeArgs, CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs, RemoteArgs,
-    ReplayArgs, RunArgs, ServerArgs, SymbolicArgs, TuiArgs, UpgradeCheckArgs, Verbosity,
+    ReplArgs, ReplayArgs, RunArgs, ServerArgs, SymbolicArgs, TuiArgs, UpgradeCheckArgs, Verbosity,
 };
 use crate::debugger::engine::DebuggerEngine;
 use crate::debugger::instruction_pointer::StepMode;
@@ -1847,6 +1847,36 @@ pub fn remote(args: RemoteArgs, _verbosity: Verbosity) -> Result<()> {
             }
         }
     }
+
+    Ok(())
+}
+
+/// Start interactive REPL session for contract exploration
+pub async fn repl(args: ReplArgs) -> Result<()> {
+    use crate::repl::{start_repl, ReplConfig};
+
+    print_info(format!("Loading contract: {:?}", args.contract));
+
+    // Validate contract file exists
+    if !args.contract.exists() {
+        return Err(DebuggerError::WasmLoadError(format!(
+            "Contract file not found: {:?}",
+            args.contract
+        ))
+        .into());
+    }
+
+    print_success(format!("Contract loaded successfully: {:?}", args.contract));
+
+    // Construct REPL config from arguments
+    let config = ReplConfig {
+        contract_path: args.contract,
+        network_snapshot: args.network_snapshot,
+        storage: args.storage,
+    };
+
+    // Start the REPL session
+    start_repl(config).await?;
 
     Ok(())
 }

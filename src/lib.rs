@@ -13,6 +13,7 @@ pub mod output;
 pub mod plugin;
 pub mod profiler;
 pub mod repeat;
+pub mod repl;
 pub mod runtime;
 pub mod server;
 pub mod simulator;

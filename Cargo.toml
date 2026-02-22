@@ -64,6 +64,9 @@ dirs = "5.0"
 
 is-terminal = "0.4"
 
+# REPL and readline
+rustyline = "13.0"
+
 # Async runtime and networking
 tokio = { version = "1.35", features = ["full"] }
 rustls = "0.21"
