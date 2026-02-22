@@ -188,8 +188,8 @@ impl UpgradeAnalyzer {
         function: &str,
         args: Option<&str>,
     ) -> Result<ExecutionDiff> {
-        let old_executor = ContractExecutor::new(old_wasm.to_vec())?;
-        let new_executor = ContractExecutor::new(new_wasm.to_vec())?;
+        let mut old_executor = ContractExecutor::new(old_wasm.to_vec())?;
+        let mut new_executor = ContractExecutor::new(new_wasm.to_vec())?;
 
         // Run old
         let old_result = old_executor.execute(function, args);

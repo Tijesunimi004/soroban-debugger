@@ -1,10 +1,21 @@
 use crate::utils::ArgumentParser;
 use crate::{DebuggerError, Result};
 
-use soroban_env_host::{DiagnosticLevel, Host};
+use soroban_env_host::xdr::ScVal;
+use soroban_env_host::{DiagnosticLevel, Host, TryFromVal};
 use soroban_sdk::{Address, Env, InvokeError, Symbol, Val, Vec as SorobanVec};
 use std::collections::HashMap;
 use tracing::{info, warn};
+
+/// Represents a captured execution trace.
+#[derive(Debug, Clone)]
+pub struct ExecutionRecord {
+    pub function: String,
+    pub args: Vec<ScVal>,
+    pub result: std::result::Result<ScVal, String>,
+    pub storage_before: HashMap<String, String>,
+    pub storage_after: HashMap<String, String>,
+}
 
 /// Storage snapshot for dry-run rollback.
 #[derive(Debug, Clone)]
@@ -16,6 +27,7 @@ pub struct StorageSnapshot {
 pub struct ContractExecutor {
     env: Env,
     contract_address: Address,
+    last_execution: Option<ExecutionRecord>,
 }
 
 impl ContractExecutor {
@@ -33,11 +45,12 @@ impl ContractExecutor {
         Ok(Self {
             env,
             contract_address,
+            last_execution: None,
         })
     }
 
     /// Execute a contract function.
-    pub fn execute(&self, function: &str, args: Option<&str>) -> Result<String> {
+    pub fn execute(&mut self, function: &str, args: Option<&str>) -> Result<String> {
         info!("Executing function: {}", function);
 
         let func_symbol = Symbol::new(&self.env, function);
@@ -54,42 +67,74 @@ impl ContractExecutor {
             SorobanVec::from_slice(&self.env, &parsed_args)
         };
 
-        match self.env.try_invoke_contract::<Val, InvokeError>(
+        // Capture storage before
+        let storage_before = self.get_storage_snapshot()?;
+
+        // Convert args to ScVal for record
+        let sc_args: Vec<ScVal> = parsed_args
+            .iter()
+            .map(|v| ScVal::try_from_val(self.env.host(), v))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| {
+                DebuggerError::ExecutionError(format!("Failed to convert arguments to ScVal: {:?}", e))
+            })?;
+        
+        let invocation_result = self.env.try_invoke_contract::<Val, InvokeError>(
             &self.contract_address,
             &func_symbol,
             args_vec,
-        ) {
-            Ok(Ok(val)) => Ok(format!("{:?}", val)),
-            Ok(Err(conv_err)) => Err(DebuggerError::ExecutionError(format!(
-                "Return value conversion failed: {:?}",
-                conv_err
-            ))
-            .into()),
-            Err(Ok(inv_err)) => match inv_err {
-                InvokeError::Contract(code) => {
-                    warn!("Contract returned error code: {}", code);
-                    Err(
-                        DebuggerError::ExecutionError(format!("Contract error code: {}", code))
-                            .into(),
-                    )
-                }
-                InvokeError::Abort => {
-                    warn!("Contract execution aborted");
-                    Err(
-                        DebuggerError::ExecutionError("Contract execution aborted".to_string())
-                            .into(),
-                    )
-                }
-            },
-            Err(Err(inv_err)) => {
-                warn!("Invocation error conversion failed: {:?}", inv_err);
-                Err(DebuggerError::ExecutionError(format!(
-                    "Invocation error conversion failed: {:?}",
-                    inv_err
-                ))
-                .into())
+        );
+
+        // Capture storage after
+        let storage_after = self.get_storage_snapshot()?;
+
+        let (display_result, record_result) = match &invocation_result {
+            Ok(Ok(val)) => {
+                let sc_val = ScVal::try_from_val(self.env.host(), val).map_err(|e| {
+                    DebuggerError::ExecutionError(format!("Result conversion failed: {:?}", e))
+                })?;
+                (Ok(format!("{:?}", val)), Ok(sc_val))
             }
-        }
+            Ok(Err(conv_err)) => {
+                let err_msg = format!("Return value conversion failed: {:?}", conv_err);
+                (
+                    Err(DebuggerError::ExecutionError(err_msg.clone()).into()),
+                    Err(err_msg),
+                )
+            }
+            Err(Ok(inv_err)) => {
+                let err_msg = match inv_err {
+                    InvokeError::Contract(code) => format!("Contract error code: {}", code),
+                    InvokeError::Abort => "Contract execution aborted".to_string(),
+                };
+                (
+                    Err(DebuggerError::ExecutionError(err_msg.clone()).into()),
+                    Err(err_msg),
+                )
+            }
+            Err(Err(inv_err)) => {
+                let err_msg = format!("Invocation error conversion failed: {:?}", inv_err);
+                (
+                    Err(DebuggerError::ExecutionError(err_msg.clone()).into()),
+                    Err(err_msg),
+                )
+            }
+        };
+
+        self.last_execution = Some(ExecutionRecord {
+            function: function.to_string(),
+            args: sc_args,
+            result: record_result,
+            storage_before,
+            storage_after,
+        });
+
+        display_result
+    }
+
+    /// Get the last execution record, if any.
+    pub fn last_execution(&self) -> Option<&ExecutionRecord> {
+        self.last_execution.as_ref()
     }
 
     /// Set initial storage state.
@@ -115,7 +160,7 @@ impl ContractExecutor {
 
     /// Capture a snapshot of current contract storage.
     pub fn get_storage_snapshot(&self) -> Result<HashMap<String, String>> {
-        Ok(HashMap::new())
+        Ok(crate::inspector::storage::StorageInspector::capture_snapshot(self.env.host()))
     }
 
     /// Snapshot current storage state for dry-run rollback.

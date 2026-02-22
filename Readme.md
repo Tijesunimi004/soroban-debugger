@@ -98,6 +98,27 @@ Options:
       --batch-args <FILE>   Path to JSON file with array of argument sets for batch execution
 ```
 
+  --batch-args <FILE>   Path to JSON file with array of argument sets for batch execution
+```
+
+### Automatic Test Generation
+
+Automatically generate a valid Rust unit test file that reproduces the exact execution — capturing inputs, expected outputs, and storage state assertions — so you receive free, ready-to-run regression tests directly from your debug sessions.
+
+```bash
+soroban-debug run \
+  --contract token.wasm \
+  --function transfer \
+  --args '["Alice", "Bob", 100]' \
+  --generate-test tests/reproc_test.rs
+```
+
+Generated tests are self-contained and use the Soroban test SDK.
+
+Options:
+  --generate-test <FILE>  Write generated test to the specified file
+  --overwrite             Overwrite the test file if it already exists (default: append)
+
 ### Batch Execution
 
 Run the same contract function with multiple argument sets in parallel for regression testing:

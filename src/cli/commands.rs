@@ -179,6 +179,18 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
     print_success(format!("Result: {:?}", result));
     logging::log_execution_complete(&result);
 
+    // Generate test if requested
+    if let Some(test_path) = &args.generate_test {
+        if let Some(record) = engine.executor().last_execution() {
+            print_info(format!("\nGenerating unit test: {:?}", test_path));
+            let test_code = crate::codegen::TestGenerator::generate(record, &args.contract)?;
+            crate::codegen::TestGenerator::write_to_file(test_path, &test_code, args.overwrite)?;
+            print_success(format!("Unit test generated successfully at {:?}", test_path));
+        } else {
+            print_warning("No execution record found to generate test.");
+        }
+    }
+
     let mut json_events = None;
     if args.show_events {
         print_info("\n--- Events ---");

@@ -92,7 +92,7 @@ impl BatchExecutor {
         let executor_result = ContractExecutor::new(self.wasm_bytes.clone());
 
         let (result_str, success, error) = match executor_result {
-            Ok(executor) => match executor.execute(&self.function, Some(&item.args)) {
+            Ok(mut executor) => match executor.execute(&self.function, Some(&item.args)) {
                 Ok(result) => (result, true, None),
                 Err(e) => (String::new(), false, Some(format!("{:#}", e))),
             },
