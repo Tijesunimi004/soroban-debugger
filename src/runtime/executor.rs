@@ -3,6 +3,7 @@ use crate::utils::ArgumentParser;
 use crate::{runtime::mocking::MockCallLogEntry, runtime::mocking::MockContractDispatcher};
 use crate::{DebuggerError, Result};
 
+use indicatif::{ProgressBar, ProgressStyle};
 use soroban_env_host::xdr::ScVal;
 use soroban_env_host::{DiagnosticLevel, Host, TryFromVal};
 use soroban_sdk::{Address, Env, InvokeError, Symbol, Val, Vec as SorobanVec};
@@ -10,7 +11,6 @@ use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
-use indicatif::{ProgressBar, ProgressStyle};
 
 /// Represents a captured execution trace.
 #[derive(Debug, Clone)]
