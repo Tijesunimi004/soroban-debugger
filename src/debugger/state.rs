@@ -1,3 +1,8 @@
+/// Represents the current state of the debugger
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DebugState {
+    pub current_function: Option<String>,
+    pub step_count: usize,
 use crate::debugger::instruction_pointer::{InstructionPointer, StepMode};
 use crate::inspector::stack::CallStackInspector;
 use crate::runtime::instruction::Instruction;

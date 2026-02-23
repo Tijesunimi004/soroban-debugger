@@ -116,6 +116,7 @@ fn env_var_disables_banner(value: Option<&str>) -> bool {
     value.is_some_and(|v| {
         let trimmed = v.trim();
      trimmed == "1" || trimmed.eq_ignore_ascii_case("true")
+        trimmed == "1" || trimmed.eq_ignore_ascii_case("true")
     })
 }
 
@@ -171,6 +172,36 @@ fn main() -> miette::Result<()> {
         }
         Some(Commands::Compare(args)) => soroban_debugger::cli::commands::compare(args),
 @@ -195,50 +200,61 @@ fn main() -> miette::Result<()> {
+        Some(Commands::Replay(args)) => soroban_debugger::cli::commands::replay(args, verbosity),
+        Some(Commands::Completions(args)) => {
+            let mut cmd = Cli::command();
+            generate(args.shell, &mut cmd, "soroban-debug", &mut io::stdout());
+            Ok(())
+        }
+        Some(Commands::Profile(args)) => soroban_debugger::cli::commands::profile(args),
+        Some(Commands::Symbolic(args)) => {
+            soroban_debugger::cli::commands::symbolic(args, verbosity)
+        }
+        Some(Commands::Server(args)) => soroban_debugger::cli::commands::server(args),
+        Some(Commands::Remote(args)) => soroban_debugger::cli::commands::remote(args, verbosity),
+        Some(Commands::Analyze(args)) => soroban_debugger::cli::commands::analyze(args, verbosity),
+        Some(Commands::Scenario(args)) => {
+            soroban_debugger::cli::commands::scenario(args, verbosity)
+        }
+        Some(Commands::Repl(mut args)) => {
+            args.merge_config(&config);
+            tokio::runtime::Runtime::new()
+                .map_err(|e| miette::miette!(e))?
+                .block_on(soroban_debugger::cli::commands::repl(args))
+                .map_err(|e| miette::miette!(e))
+        }
+        Commands::UpgradeCheck(args) => {
+            soroban_debugger::cli::commands::upgrade_check(args)?;
+        }
+        None => {
+            if let Some(path) = cli.list_functions {
+                return soroban_debugger::cli::commands::inspect(
+                    soroban_debugger::cli::args::InspectArgs {
                         contract: path,
                         wasm: None,
                         functions: true,
@@ -233,6 +264,18 @@ mod tests {
     }
 
     #[test]
+    fn banner_is_max_five_lines_tall() {
+        let banner = banner_text();
+        assert!(banner.lines().count() <= 5);
+    }
+
+    #[test]
+    fn no_banner_flag_suppresses_output() {
+        let args = parse_cli(&["soroban-debug", "--no-banner"]);
+        assert!(!should_show_banner_with(&args, true, None));
+    }
+
+    #[test]
     fn no_banner_env_var_suppresses_output() {
         let args = parse_cli(&["soroban-debug"]);
         assert!(!should_show_banner_with(&args, true, Some("1")));
@@ -251,4 +294,5 @@ mod tests {
         let args = parse_cli(&["soroban-debug"]);
         assert!(should_show_banner_with(&args, true, None));
     }
+}
 }

@@ -1,3 +1,6 @@
+use crate::analyzer::upgrade::{FunctionSignature, WasmType};
+use crate::Result;
+use wasmparser::{CompositeType, Parser, Payload, TypeRef, ValType};
 use crate::{DebuggerError, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -139,119 +142,48 @@ pub fn parse_cross_contract_calls(wasm_bytes: &[u8]) -> Result<Vec<CrossContract
     Ok(calls)
 }
 
-/// Get high-level module statistics and section breakdown from a WASM binary.
 pub fn get_module_info(wasm_bytes: &[u8]) -> Result<ModuleInfo> {
     let mut info = ModuleInfo {
         total_size: wasm_bytes.len(),
         ..ModuleInfo::default()
     };
-    let parser = Parser::new(0);
 
-    for payload in parser.parse_all(wasm_bytes) {
+    let mut add_section = |name: String, range: std::ops::Range<usize>| {
+        info.sections.push(WasmSection {
+            name,
+            size: range.end - range.start,
+            offset: range.start,
+        });
+    };
+
+    for payload in Parser::new(0).parse_all(wasm_bytes) {
         let payload = payload
             .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to parse WASM: {}", e)))?;
-        match &payload {
-            Payload::Version { .. } => {}
+        match payload {
             Payload::TypeSection(reader) => {
                 info.type_count = reader.count();
-                info.sections.push(WasmSection {
-                    name: "Type".to_string(),
-                    size: reader.range().end - reader.range().start,
-                    offset: reader.range().start,
-                });
+                add_section("Type".into(), reader.range());
             }
-            Payload::ImportSection(reader) => {
-                info.sections.push(WasmSection {
-                    name: "Import".to_string(),
-                    size: reader.range().end - reader.range().start,
-                    offset: reader.range().start,
-                });
-            }
+            Payload::ImportSection(reader) => add_section("Import".into(), reader.range()),
             Payload::FunctionSection(reader) => {
                 info.function_count = reader.count();
-                info.sections.push(WasmSection {
-                    name: "Function".to_string(),
-                    size: reader.range().end - reader.range().start,
-                    offset: reader.range().start,
-                });
+                add_section("Function".into(), reader.range());
             }
-            Payload::TableSection(reader) => {
-                info.sections.push(WasmSection {
-                    name: "Table".to_string(),
-                    size: reader.range().end - reader.range().start,
-                    offset: reader.range().start,
-                });
-            }
-            Payload::MemorySection(reader) => {
-                info.sections.push(WasmSection {
-                    name: "Memory".to_string(),
-                    size: reader.range().end - reader.range().start,
-                    offset: reader.range().start,
-                });
-            }
-            Payload::GlobalSection(reader) => {
-                info.sections.push(WasmSection {
-                    name: "Global".to_string(),
-                    size: reader.range().end - reader.range().start,
-                    offset: reader.range().start,
-                });
-            }
+            Payload::TableSection(reader) => add_section("Table".into(), reader.range()),
+            Payload::MemorySection(reader) => add_section("Memory".into(), reader.range()),
+            Payload::GlobalSection(reader) => add_section("Global".into(), reader.range()),
             Payload::ExportSection(reader) => {
                 info.export_count = reader.count();
-                info.sections.push(WasmSection {
-                    name: "Export".to_string(),
-                    size: reader.range().end - reader.range().start,
-                    offset: reader.range().start,
-                });
+                add_section("Export".into(), reader.range());
             }
-            Payload::StartSection { range, .. } => {
-                info.sections.push(WasmSection {
-                    name: "Start".to_string(),
-                    size: range.end - range.start,
-                    offset: range.start,
-                });
-            }
-            Payload::ElementSection(reader) => {
-                info.sections.push(WasmSection {
-                    name: "Element".to_string(),
-                    size: reader.range().end - reader.range().start,
-                    offset: reader.range().start,
-                });
-            }
-            Payload::CodeSectionStart { range, .. } => {
-                info.sections.push(WasmSection {
-                    name: "Code".to_string(),
-                    size: range.end - range.start,
-                    offset: range.start,
-                });
-            }
-            Payload::CodeSectionEntry(reader) => {
-                info.sections.push(WasmSection {
-                    name: "Code (Entry)".to_string(),
-                    size: reader.range().end - reader.range().start,
-                    offset: reader.range().start,
-                });
-            }
-            Payload::DataSection(reader) => {
-                info.sections.push(WasmSection {
-                    name: "Data".to_string(),
-                    size: reader.range().end - reader.range().start,
-                    offset: reader.range().start,
-                });
-            }
-            Payload::DataCountSection { range, .. } => {
-                info.sections.push(WasmSection {
-                    name: "Data Count".to_string(),
-                    size: range.end - range.start,
-                    offset: range.start,
-                });
-            }
+            Payload::StartSection { range, .. } => add_section("Start".into(), range),
+            Payload::ElementSection(reader) => add_section("Element".into(), reader.range()),
+            Payload::CodeSectionStart { range, .. } => add_section("Code".into(), range),
+            Payload::CodeSectionEntry(reader) => add_section("Code (Entry)".into(), reader.range()),
+            Payload::DataSection(reader) => add_section("Data".into(), reader.range()),
+            Payload::DataCountSection { range, .. } => add_section("Data Count".into(), range),
             Payload::CustomSection(reader) => {
-                info.sections.push(WasmSection {
-                    name: format!("Custom ({})", reader.name()),
-                    size: reader.range().end - reader.range().start,
-                    offset: reader.range().start,
-                });
+                add_section(format!("Custom ({})", reader.name()), reader.range())
             }
             _ => {}
         }
@@ -267,6 +199,81 @@ pub struct ModuleInfo {
     pub type_count: u32,
     pub function_count: u32,
     pub export_count: u32,
+}
+
+/// Parse full function signatures (name + param types + return types) from WASM
+pub fn parse_function_signatures(wasm_bytes: &[u8]) -> Result<Vec<FunctionSignature>> {
+    // Step 1: collect all type definitions indexed by type index
+    let mut func_types: Vec<Option<wasmparser::FuncType>> = Vec::new();
+    // Type indices for imported functions (in import order)
+    let mut import_type_indices: Vec<u32> = Vec::new();
+    // Type indices for local functions (in function-section order)
+    let mut local_type_indices: Vec<u32> = Vec::new();
+    // Exported function names and their function indices
+    let mut exports: Vec<(String, u32)> = Vec::new();
+
+    let parser = Parser::new(0);
+    for payload in parser.parse_all(wasm_bytes) {
+        match payload? {
+            Payload::TypeSection(reader) => {
+                for rec_group in reader {
+                    let rec_group = rec_group?;
+                    for sub_type in rec_group.into_types() {
+                        match sub_type.composite_type {
+                            CompositeType::Func(ft) => func_types.push(Some(ft)),
+                            _ => func_types.push(None),
+                        }
+                    }
+                }
+            }
+            Payload::ImportSection(reader) => {
+                for import in reader {
+                    let import = import?;
+                    if let TypeRef::Func(type_idx) = import.ty {
+                        import_type_indices.push(type_idx);
+                    }
+                }
+            }
+            Payload::FunctionSection(reader) => {
+                for type_idx in reader {
+                    local_type_indices.push(type_idx?);
+                }
+            }
+            Payload::ExportSection(reader) => {
+                for export in reader {
+                    let export = export?;
+                    if matches!(export.kind, wasmparser::ExternalKind::Func) {
+                        exports.push((export.name.to_string(), export.index));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Step 2: build combined function-index → type-index map
+    let all_type_indices: Vec<u32> = import_type_indices
+        .iter()
+        .chain(local_type_indices.iter())
+        .copied()
+        .collect();
+
+    // Step 3: resolve each export to a FunctionSignature
+    let mut signatures = Vec::new();
+    for (name, func_idx) in exports {
+        let func_idx = func_idx as usize;
+        if func_idx >= all_type_indices.len() {
+            continue;
+        }
+        let type_idx = all_type_indices[func_idx] as usize;
+        if type_idx >= func_types.len() {
+            continue;
+        }
+        if let Some(ft) = &func_types[type_idx] {
+            let params = ft.params().iter().map(val_type_to_wasm_type).collect();
+            let results = ft.results().iter().map(val_type_to_wasm_type).collect();
+            signatures.push(FunctionSignature { name, params, results });
+        }
     pub sections: Vec<WasmSection>,
 }
 
@@ -498,18 +505,26 @@ pub fn extract_contract_metadata(wasm_bytes: &[u8]) -> Result<ContractMetadata> 
 // ─── contract spec / function signatures ─────────────────────────────────────
 
 /// A single function parameter: name and its Soroban type as a display string.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FunctionParam {
     pub name: String,
     pub type_name: String,
 }
 
 /// Full signature for one exported contract function.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FunctionSignature {
     pub name: String,
     pub params: Vec<FunctionParam>,
     pub return_type: Option<String>,
+}
+
+/// A custom error definition extracted from a contract spec.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CustomError {
+    pub code: u32,
+    pub name: String,
+    pub doc: String,
 }
 
 /// Convert an XDR `ScSpecTypeDef` into a human-readable type string.
@@ -624,6 +639,70 @@ pub fn parse_function_signatures(wasm_bytes: &[u8]) -> Result<Vec<FunctionSignat
     }
 
     Ok(signatures)
+}
+
+fn val_type_to_wasm_type(vt: &ValType) -> WasmType {
+    match vt {
+        ValType::I32 => WasmType::I32,
+        ValType::I64 => WasmType::I64,
+        ValType::F32 => WasmType::F32,
+        ValType::F64 => WasmType::F64,
+        ValType::V128 => WasmType::V128,
+        ValType::Ref(rt) => {
+            if rt.is_func_ref() {
+                WasmType::FuncRef
+            } else if rt.is_extern_ref() {
+                WasmType::ExternRef
+            } else {
+                WasmType::Unknown
+            }
+        }
+    }
+}
+/// Parse custom error definitions from the WASM `contractspecv0` custom section.
+pub fn parse_custom_errors(wasm_bytes: &[u8]) -> Result<Vec<CustomError>> {
+    use stellar_xdr::curr::{Limited, Limits, ReadXdr, ScSpecEntry};
+
+    let mut errors = Vec::new();
+    let parser = Parser::new(0);
+
+    for payload in parser.parse_all(wasm_bytes) {
+        let Payload::CustomSection(reader) = payload
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to parse WASM: {}", e)))?
+        else {
+            continue;
+        };
+
+        if reader.name() != "contractspecv0" {
+            continue;
+        }
+
+        let data = reader.data();
+        let cursor = std::io::Cursor::new(data);
+        let mut limited = Limited::new(cursor, Limits::none());
+
+        loop {
+            match ScSpecEntry::read_xdr(&mut limited) {
+                Ok(ScSpecEntry::UdtErrorEnumV0(err_enum)) => {
+                    for case in err_enum.cases.iter() {
+                        errors.push(CustomError {
+                            code: case.value,
+                            name: stringm_to_string(case.name.as_slice()),
+                            doc: stringm_to_string(case.doc.as_slice()),
+                        });
+                    }
+                }
+                Ok(_) => {
+                    // Other spec entries — skip
+                }
+                Err(_) => break, // end of section or corrupt data
+            }
+        }
+
+        break;
+    }
+
+    Ok(errors)
 }
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -924,5 +1003,45 @@ implementation_notes=Line-based format
             ..Default::default()
         };
         assert!(!meta.is_empty());
+    }
+
+    // ── error extraction tests ────────────────────────────────────────────────
+
+    #[test]
+    fn extract_custom_errors() {
+        use stellar_xdr::curr::{
+            ScSpecEntry, ScSpecUdtErrorEnumCaseV0, ScSpecUdtErrorEnumV0, StringM, WriteXdr,
+        };
+
+        let case1 = ScSpecUdtErrorEnumCaseV0 {
+            doc: StringM::try_from("My Error 1".as_bytes().to_vec()).unwrap(),
+            name: StringM::try_from("ErrorOne".as_bytes().to_vec()).unwrap(),
+            value: 100,
+        };
+        let case2 = ScSpecUdtErrorEnumCaseV0 {
+            doc: StringM::try_from("My Error 2".as_bytes().to_vec()).unwrap(),
+            name: StringM::try_from("ErrorTwo".as_bytes().to_vec()).unwrap(),
+            value: 101,
+        };
+        let err_enum = ScSpecUdtErrorEnumV0 {
+            doc: StringM::try_from("".as_bytes().to_vec()).unwrap(),
+            lib: StringM::try_from("".as_bytes().to_vec()).unwrap(),
+            name: StringM::try_from("MyErrorType".as_bytes().to_vec()).unwrap(),
+            cases: vec![case1, case2].try_into().unwrap(),
+        };
+
+        let entry = ScSpecEntry::UdtErrorEnumV0(err_enum);
+        let payload = entry.to_xdr(stellar_xdr::curr::Limits::none()).unwrap();
+
+        let wasm = make_custom_section_wasm("contractspecv0", &payload);
+
+        let errors = parse_custom_errors(&wasm).expect("parsing should succeed");
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors[0].code, 100);
+        assert_eq!(errors[0].name, "ErrorOne");
+        assert_eq!(errors[0].doc, "My Error 1");
+        assert_eq!(errors[1].code, 101);
+        assert_eq!(errors[1].name, "ErrorTwo");
+        assert_eq!(errors[1].doc, "My Error 2");
     }
 }
