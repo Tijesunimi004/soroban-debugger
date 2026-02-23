@@ -130,6 +130,8 @@ pub enum Commands {
     /// Inspect contract information without executing
     Inspect(InspectArgs),
 
+    /// Check compatibility between two contract versions
+    UpgradeCheck(UpgradeCheckArgs),
     /// Generate shell completion scripts
     Completions(CompletionsArgs),
     /// Analyze contract and generate gas optimization suggestions
@@ -200,6 +202,29 @@ pub struct RunArgs {
     #[arg(short, long)]
     pub verbose: bool,
 
+    /// Start in server mode
+    #[arg(long)]
+    pub server: bool,
+
+    /// Port to listen on or connect to
+    #[arg(long, default_value = "9229")]
+    pub port: u16,
+
+    /// Connect to a remote debugger (address:port)
+    #[arg(long)]
+    pub remote: Option<String>,
+
+    /// Authentication token
+    #[arg(long)]
+    pub token: Option<String>,
+
+    /// Path to TLS certificate file
+    #[arg(long)]
+    pub tls_cert: Option<std::path::PathBuf>,
+
+    /// Path to TLS key file
+    #[arg(long)]
+    pub tls_key: Option<std::path::PathBuf>,
     /// Output format (text, json)
     #[arg(long)]
     pub format: Option<String>,
@@ -430,6 +455,31 @@ pub struct InspectArgs {
     /// Show contract metadata
     #[arg(long)]
     pub metadata: bool,
+}
+
+#[derive(Parser)]
+pub struct UpgradeCheckArgs {
+    /// Path to the old (current) contract WASM file
+    #[arg(long)]
+    pub old: PathBuf,
+
+    /// Path to the new (upgraded) contract WASM file
+    #[arg(long)]
+    pub new: PathBuf,
+
+    /// Output format: text (default) or json
+    #[arg(long, default_value = "text")]
+    pub output: String,
+
+    /// Write report to file instead of stdout
+    #[arg(long)]
+    pub output_file: Option<PathBuf>,
+
+    /// Test inputs as JSON object mapping function names to argument arrays
+    /// e.g. '{"vote": [1, true], "create_proposal": ["title", "desc"]}'
+    #[arg(long)]
+    pub test_inputs: Option<String>,
+}
 
     /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
     #[arg(long)]

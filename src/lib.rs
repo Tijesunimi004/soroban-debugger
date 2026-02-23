@@ -1,3 +1,4 @@
+pub mod analyzer;
 #![recursion_limit = "256"]
 pub mod analyzer;
 pub mod batch;
@@ -9,6 +10,9 @@ pub mod config;
 pub mod debugger;
 pub mod history;
 pub mod inspector;
+pub mod protocol;
+pub mod server;
+pub mod client;
 pub mod logging;
 pub mod output;
 pub mod plugin;

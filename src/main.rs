@@ -188,6 +188,9 @@ fn main() -> miette::Result<()> {
                 .block_on(soroban_debugger::cli::commands::repl(args))
                 .map_err(|e| miette::miette!(e))
         }
+        Commands::UpgradeCheck(args) => {
+            soroban_debugger::cli::commands::upgrade_check(args)?;
+        }
         None => {
             if let Some(path) = cli.list_functions {
                 return soroban_debugger::cli::commands::inspect(
