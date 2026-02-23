@@ -10,6 +10,7 @@ use soroban_env_host::{DiagnosticLevel, Host, TryFromVal};
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env, InvokeError, Symbol, Val, Vec as SorobanVec};
 
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};
@@ -35,6 +36,7 @@ use crate::debugger::error_db::ErrorDatabase;
 
 /// Executes Soroban contracts in a test environment.
 pub struct ContractExecutor {
+ impl ContractExecutor {
     env: Env,
     contract_address: Address,
     last_execution: Option<ExecutionRecord>,
@@ -172,6 +174,7 @@ impl ContractExecutor {
         let func_symbol = Symbol::new(&self.env, function);
 
         let parsed_args = if let Some(args_json) = args {
+            match self.parse_args(function, args_json) {
             match self.parse_args(args_json) {
                 Ok(args) => args,
                 Err(e) => {
@@ -302,6 +305,7 @@ impl ContractExecutor {
         };
         memory_tracker.record_snapshot(self.env.host(), "execute:result_convert");
 
+ impl ContractExecutor {
         let _ = tx.send(());
 
         // Display budget usage and warnings
@@ -447,11 +451,75 @@ impl ContractExecutor {
             .collect())
     }
 
-    fn parse_args(&self, args_json: &str) -> Result<Vec<Val>> {
+    fn parse_args(&self, function: &str, args_json: &str) -> Result<Vec<Val>> {
         let parser = ArgumentParser::new(self.env.clone());
-        parser.parse_args_string(args_json).map_err(|e| {
-            warn!("Failed to parse arguments: {}", e);
-            DebuggerError::InvalidArguments(e.to_string()).into()
+        let normalized_args_json = self.normalize_args_for_function(function, args_json)?;
+
+        parser
+            .parse_args_string(&normalized_args_json)
+            .map_err(|e| {
+                warn!("Failed to parse arguments: {}", e);
+                DebuggerError::InvalidArguments(e.to_string()).into()
+            })
+    }
+
+    fn normalize_args_for_function(&self, function: &str, args_json: &str) -> Result<String> {
+        let signatures = crate::utils::wasm::parse_function_signatures(&self.wasm_bytes)?;
+        let Some(signature) = signatures.into_iter().find(|sig| sig.name == function) else {
+            return Ok(args_json.to_string());
+        };
+
+        let mut args_value: JsonValue = serde_json::from_str(args_json).map_err(|e| {
+            DebuggerError::InvalidArguments(format!("Invalid JSON in --args: {}", e))
+        })?;
+
+        let JsonValue::Array(args) = &mut args_value else {
+            return Ok(args_json.to_string());
+        };
+
+        for (arg, param) in args.iter_mut().zip(signature.params.iter()) {
+            if param.type_name.starts_with("Option<") {
+                if is_typed_annotation(arg) {
+                    continue;
+                }
+                *arg = serde_json::json!({"type": "option", "value": arg.clone()});
+                continue;
+            }
+
+            if param.type_name.starts_with("Tuple<") {
+                let arity = tuple_arity_from_type_name(&param.type_name).ok_or_else(|| {
+                    DebuggerError::InvalidArguments(format!(
+                        "Invalid tuple type in function spec for '{}': {}",
+                        param.name, param.type_name
+                    ))
+                })?;
+
+                let JsonValue::Array(actual_arr) = arg else {
+                    return Err(DebuggerError::InvalidArguments(format!(
+                        "Argument '{}' expects tuple with {} elements, got {}",
+                        param.name,
+                        arity,
+                        json_type_name(arg)
+                    ))
+                    .into());
+                };
+
+                if actual_arr.len() != arity {
+                    return Err(DebuggerError::InvalidArguments(format!(
+                        "Tuple arity mismatch: expected {}, got {}",
+                        arity,
+                        actual_arr.len()
+                    ))
+                    .into());
+                }
+
+                *arg = serde_json::json!({"type": "tuple", "arity": arity, "value": actual_arr.clone()});
+            }
+        }
+
+        serde_json::to_string(&args_value).map_err(|e| {
+            DebuggerError::ExecutionError(format!("Failed to normalize arguments JSON: {}", e))
+                .into()
         })
     }
 
@@ -495,5 +563,57 @@ impl ContractExecutor {
             ))
             .into()),
         }
+    }
+}
+
+fn tuple_arity_from_type_name(type_name: &str) -> Option<usize> {
+    let inner = type_name.strip_prefix("Tuple<")?.strip_suffix('>')?;
+    if inner.trim().is_empty() {
+        return Some(0);
+    }
+
+    let mut depth = 0usize;
+    let mut arity = 1usize;
+    for ch in inner.chars() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => arity += 1,
+            _ => {}
+        }
+    }
+
+    Some(arity)
+}
+
+fn is_typed_annotation(value: &JsonValue) -> bool {
+    matches!(
+        value,
+        JsonValue::Object(obj) if obj.get("type").is_some() && obj.get("value").is_some()
+    )
+}
+
+fn json_type_name(value: &JsonValue) -> &'static str {
+    match value {
+        JsonValue::Null => "null",
+        JsonValue::Bool(_) => "boolean",
+        JsonValue::Number(_) => "number",
+        JsonValue::String(_) => "string",
+        JsonValue::Array(_) => "array",
+        JsonValue::Object(_) => "object",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tuple_arity_from_type_name;
+
+    #[test]
+    fn tuple_arity_counts_top_level_types() {
+        assert_eq!(tuple_arity_from_type_name("Tuple<U32, Symbol>"), Some(2));
+        assert_eq!(
+            tuple_arity_from_type_name("Tuple<U32, Option<Vec<Symbol>>, Map<U32, String>>"),
+            Some(3)
+        );
     }
 }
