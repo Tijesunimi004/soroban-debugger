@@ -16,6 +16,7 @@ use crate::ui::tui::DebuggerUI;
 use crate::{DebuggerError, Result};
 use miette::WrapErr;
 use std::fs;
+use std::io::Write;
 use textplots::{Chart, Plot, Shape};
 
 fn print_info(message: impl AsRef<str>) {
@@ -126,6 +127,9 @@ fn run_batch(args: &RunArgs, batch_file: &std::path::Path) -> Result<()> {
 /// Execute the run command.
 #[tracing::instrument(skip_all, fields(contract = ?args.contract, function = args.function))]
 pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
+    // Initialize output writer
+    let mut output_writer = OutputWriter::new(args.save_output.as_ref(), args.append)?;
+
     // Handle batch execution mode
     if let Some(batch_file) = &args.batch_args {
         return run_batch(&args, batch_file);
@@ -136,6 +140,7 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     }
 
     print_info(format!("Loading contract: {:?}", args.contract));
+    output_writer.write(&format!("Loading contract: {:?}", args.contract))?;
     logging::log_loading_contract(&args.contract.to_string_lossy());
 
     let wasm_file = crate::utils::wasm::load_wasm(&args.contract)
@@ -157,11 +162,17 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
         "Contract loaded successfully ({} bytes)",
         wasm_bytes.len()
     ));
+    output_writer.write(&format!(
+        "Contract loaded successfully ({} bytes)",
+        wasm_bytes.len()
+    ))?;
 
     if args.verbose || verbosity == Verbosity::Verbose {
         print_verbose(format!("SHA-256: {}", wasm_hash));
+        output_writer.write(&format!("SHA-256: {}", wasm_hash))?;
         if args.expected_hash.is_some() {
             print_verbose("Checksum verified ✓");
+            output_writer.write("Checksum verified ✓")?;
         }
     }
 
@@ -169,9 +180,11 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
 
     if let Some(snapshot_path) = &args.network_snapshot {
         print_info(format!("\nLoading network snapshot: {:?}", snapshot_path));
+        output_writer.write(&format!("Loading network snapshot: {:?}", snapshot_path))?;
         logging::log_loading_snapshot(&snapshot_path.to_string_lossy());
         let loader = SnapshotLoader::from_file(snapshot_path)?;
         let loaded_snapshot = loader.apply_to_environment()?;
+        output_writer.write(&loaded_snapshot.format_summary())?;
         logging::log_display(loaded_snapshot.format_summary(), logging::LogLevel::Info);
     }
 
@@ -206,9 +219,12 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     }
 
     print_info("\nStarting debugger...");
+    output_writer.write("Starting debugger...")?;
     print_info(format!("Function: {}", args.function));
+    output_writer.write(&format!("Function: {}", args.function))?;
     if let Some(ref parsed) = parsed_args {
         print_info(format!("Arguments: {}", parsed));
+        output_writer.write(&format!("Arguments: {}", parsed))?;
     }
     logging::log_execution_start(&args.function, parsed_args.as_deref());
 
@@ -241,11 +257,14 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     }
 
     print_info("\n--- Execution Start ---\n");
+    output_writer.write("\n--- Execution Start ---\n")?;
     let storage_before = engine.executor().get_storage_snapshot()?;
     let result = engine.execute(&args.function, parsed_args.as_deref())?;
     let storage_after = engine.executor().get_storage_snapshot()?;
     print_success("\n--- Execution Complete ---\n");
+    output_writer.write("\n--- Execution Complete ---\n")?;
     print_result(format!("Result: {:?}", result));
+    output_writer.write(&format!("Result: {:?}", result))?;
     logging::log_execution_complete(&result);
 
     // Generate test if requested
@@ -467,12 +486,21 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
             output["ledger_entries"] = ledger.to_json();
         }
 
-        logging::log_display(
-            serde_json::to_string_pretty(&output).map_err(|e| {
-                DebuggerError::FileError(format!("Failed to serialize output: {}", e))
-            })?,
-            logging::LogLevel::Info,
-        );
+        let json_output = serde_json::to_string_pretty(&output).map_err(|e| {
+            DebuggerError::FileError(format!("Failed to serialize output: {}", e))
+        })?;
+        logging::log_display(&json_output, logging::LogLevel::Info);
+        output_writer.write(&json_output)?;
+    }
+
+    output_writer.flush()?;
+
+    // Show confirmation message if file was written
+    if let Some(output_path) = &args.save_output {
+        print_success(format!(
+            "\n✓ Output saved to: {}",
+            output_path.display()
+        ));
     }
 
     Ok(())
@@ -2172,4 +2200,56 @@ pub async fn repl(args: ReplArgs) -> Result<()> {
 
 pub fn scenario(args: ScenarioArgs, verbosity: Verbosity) -> Result<()> {
     crate::scenario::run_scenario(args, verbosity)
+}
+
+// Add helper struct before the print_* functions
+struct OutputWriter {
+    file: Option<std::fs::File>,
+}
+
+impl OutputWriter {
+    fn new(path: Option<&std::path::PathBuf>, append: bool) -> Result<Self> {
+        let file = if let Some(p) = path {
+            let file = if append {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(p)
+            } else {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(p)
+            }
+            .map_err(|e| {
+                DebuggerError::FileError(format!(
+                    "Failed to open output file {:?}: {}",
+                    p, e
+                ))
+            })?;
+            Some(file)
+        } else {
+            None
+        };
+        Ok(OutputWriter { file })
+    }
+
+    fn write(&mut self, content: &str) -> Result<()> {
+        if let Some(ref mut f) = self.file {
+            writeln!(f, "{}", content).map_err(|e| {
+                DebuggerError::FileError(format!("Failed to write to output file: {}", e))
+            })?;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        if let Some(ref mut f) = self.file {
+            f.flush().map_err(|e| {
+                DebuggerError::FileError(format!("Failed to flush output file: {}", e))
+            })?;
+        }
+        Ok(())
+    }
 }
