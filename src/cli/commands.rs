@@ -812,3 +812,64 @@ fn format_text_report(report: &CompatibilityReport) -> String {
     );
     print_info(&total_row);
 }
+
+/// Start debug server for remote connections
+pub fn server(args: ServerArgs) -> Result<()> {
+    use crate::server::DebugServer;
+
+    print_info(format!("Starting debug server on port {}", args.port));
+    
+    if args.token.is_some() {
+        print_info("Token authentication enabled");
+    } else {
+        print_warning("No authentication token specified - server will accept all connections");
+    }
+
+    if args.tls_cert.is_some() && args.tls_key.is_some() {
+        print_info("TLS enabled");
+    }
+
+    let mut server = DebugServer::new(args.port, args.token);
+    
+    if let (Some(cert), Some(key)) = (args.tls_cert, args.tls_key) {
+        server = server.with_tls(cert, key);
+    }
+
+    print_success(format!("Debug server listening on 0.0.0.0:{}", args.port));
+    print_info("Waiting for client connections...");
+    print_info("Press Ctrl+C to stop the server");
+    
+    server.start()
+}
+
+/// Connect to remote debug server
+pub fn remote(args: RemoteArgs, _verbosity: Verbosity) -> Result<()> {
+    use crate::client::RemoteClient;
+
+    print_info(format!("Connecting to remote server at {}", args.remote));
+    
+    let mut client = RemoteClient::connect(&args.remote, args.token)?;
+    
+    print_success("Connected to remote debug server");
+    
+    // If contract is specified, load it
+    if let Some(contract_path) = args.contract {
+        print_info(format!("Loading contract: {:?}", contract_path));
+        let size = client.load_contract(&contract_path.to_string_lossy())?;
+        print_success(format!("Contract loaded ({} bytes)", size));
+    }
+    
+    // If function is specified, execute it
+    if let Some(function) = args.function {
+        print_info(format!("Executing function: {}", function));
+        let result = client.execute(&function, args.args.as_deref())?;
+        print_result(format!("Result: {}", result));
+    } else {
+        // Interactive mode - ping the server
+        client.ping()?;
+        print_info("Server is responsive");
+        print_info("Use --function to execute a contract function");
+    }
+    
+    Ok(())
+}
