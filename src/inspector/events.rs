@@ -1,4 +1,4 @@
-use crate::Result;
+use crate::{DebuggerError, Result};
 use soroban_env_host::{xdr::ContractEventBody, Host};
 
 /// Represents a captured contract event
@@ -14,7 +14,10 @@ pub struct EventInspector;
 impl EventInspector {
     /// Extract events from the host and convert them to a friendly format
     pub fn get_events(host: &Host) -> Result<Vec<ContractEvent>> {
-        let events = host.get_events()?.0;
+        let events = host
+            .get_events()
+            .map_err(|e| DebuggerError::ExecutionError(format!("Failed to get events: {}", e)))?
+            .0;
         let mut contract_events = Vec::new();
 
         for host_event in events.iter() {

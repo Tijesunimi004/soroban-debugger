@@ -22,6 +22,7 @@ pub struct DebuggerEngine {
 
 impl DebuggerEngine {
     /// Create a new debugger engine.
+    #[tracing::instrument(skip_all)]
     pub fn new(executor: ContractExecutor, initial_breakpoints: Vec<String>) -> Self {
         let mut breakpoints = BreakpointManager::new();
 
@@ -46,7 +47,7 @@ impl DebuggerEngine {
         let instructions = self
             .instrumenter
             .parse_instructions(wasm_bytes)
-            .map_err(|e| anyhow::anyhow!("Failed to parse instructions: {}", e))?
+            .map_err(|e| miette::miette!("Failed to parse instructions: {}", e))?
             .to_vec();
 
         if let Ok(mut state) = self.state.lock() {
@@ -75,11 +76,12 @@ impl DebuggerEngine {
     }
 
     /// Execute a contract function with debugging.
+    #[tracing::instrument(skip(self), fields(function = function))]
     pub fn execute(&mut self, function: &str, args: Option<&str>) -> Result<String> {
         info!("Executing function: {}", function);
 
         if let Ok(mut state) = self.state.lock() {
-            state.set_current_function(function.to_string());
+            state.set_current_function(function.to_string(), args.map(str::to_string));
             state.call_stack_mut().clear();
             state.call_stack_mut().push(function.to_string(), None);
         }
@@ -95,7 +97,7 @@ impl DebuggerEngine {
         self.update_call_stack(duration)?;
 
         if let Err(ref e) = result {
-            println!("\n[ERROR] Execution failed: {}", e);
+            tracing::error!("Execution failed: {}", e);
             if let Ok(state) = self.state.lock() {
                 state.call_stack().display();
             }
@@ -148,7 +150,7 @@ impl DebuggerEngine {
     /// Step into next instruction.
     pub fn step_into(&mut self) -> Result<bool> {
         if !self.instruction_debug_enabled {
-            return Err(anyhow::anyhow!("Instruction debugging not enabled"));
+            return Err(miette::miette!("Instruction debugging not enabled"));
         }
 
         let stepped = if let Ok(mut state) = self.state.lock() {
@@ -163,7 +165,7 @@ impl DebuggerEngine {
     /// Step over function calls.
     pub fn step_over(&mut self) -> Result<bool> {
         if !self.instruction_debug_enabled {
-            return Err(anyhow::anyhow!("Instruction debugging not enabled"));
+            return Err(miette::miette!("Instruction debugging not enabled"));
         }
 
         let stepped = if let Ok(mut state) = self.state.lock() {
@@ -178,7 +180,7 @@ impl DebuggerEngine {
     /// Step out of current function.
     pub fn step_out(&mut self) -> Result<bool> {
         if !self.instruction_debug_enabled {
-            return Err(anyhow::anyhow!("Instruction debugging not enabled"));
+            return Err(miette::miette!("Instruction debugging not enabled"));
         }
 
         let stepped = if let Ok(mut state) = self.state.lock() {
@@ -193,7 +195,7 @@ impl DebuggerEngine {
     /// Step to next basic block.
     pub fn step_block(&mut self) -> Result<bool> {
         if !self.instruction_debug_enabled {
-            return Err(anyhow::anyhow!("Instruction debugging not enabled"));
+            return Err(miette::miette!("Instruction debugging not enabled"));
         }
 
         let stepped = if let Ok(mut state) = self.state.lock() {
@@ -208,7 +210,7 @@ impl DebuggerEngine {
     /// Step backwards to previous instruction.
     pub fn step_back(&mut self) -> Result<bool> {
         if !self.instruction_debug_enabled {
-            return Err(anyhow::anyhow!("Instruction debugging not enabled"));
+            return Err(miette::miette!("Instruction debugging not enabled"));
         }
 
         let stepped = if let Ok(mut state) = self.state.lock() {
@@ -223,7 +225,7 @@ impl DebuggerEngine {
     /// Start instruction stepping with given mode.
     pub fn start_instruction_stepping(&mut self, mode: StepMode) -> Result<()> {
         if !self.instruction_debug_enabled {
-            return Err(anyhow::anyhow!("Instruction debugging not enabled"));
+            return Err(miette::miette!("Instruction debugging not enabled"));
         }
 
         if let Ok(mut state) = self.state.lock() {
@@ -248,7 +250,7 @@ impl DebuggerEngine {
         self.paused = true;
 
         if let Ok(mut state) = self.state.lock() {
-            state.set_current_function(function.to_string());
+            state.set_current_function(function.to_string(), None);
             state.call_stack().display();
         }
     }
