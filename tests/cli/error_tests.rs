@@ -1,4 +1,3 @@
-
 #![allow(deprecated)]
 /// Integration tests for CLI error handling and edge cases
 ///

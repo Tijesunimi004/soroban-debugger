@@ -1,19 +1,15 @@
 #![allow(deprecated)]
-use assert_cmd::prelude::*;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
 #[test]
 fn test_inspect_requires_contract_arg() {
     let mut cmd = assert_cmd::Command::cargo_bin("soroban-debug").expect("Failed to find binary");
-    cmd.args(["inspect"])
-        .assert()
-        .failure()
-        .stderr(
-            predicate::str::contains("contract")
-                .or(predicate::str::contains("required"))
-                .or(predicate::str::contains("missing")),
-        );
+    cmd.args(["inspect"]).assert().failure().stderr(
+        predicate::str::contains("contract")
+            .or(predicate::str::contains("required"))
+            .or(predicate::str::contains("missing")),
+    );
 }
 
 #[test]

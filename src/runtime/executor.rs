@@ -6,8 +6,8 @@ use crate::{DebuggerError, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use soroban_env_host::xdr::ScVal;
 use soroban_env_host::{DiagnosticLevel, Host, TryFromVal};
-use soroban_sdk::{Address, Env, InvokeError, Symbol, Val, Vec as SorobanVec};
 use soroban_sdk::testutils::Address as _;
+use soroban_sdk::{Address, Env, InvokeError, Symbol, Val, Vec as SorobanVec};
 
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -354,18 +354,26 @@ impl ContractExecutor {
 
     /// Finish the execution session, consuming the environment to extract the underlying storage footprint.
     /// This removes all internal references to the host and then extracts its tracking state.
-    pub fn finish(&mut self) -> Result<(soroban_env_host::storage::Footprint, soroban_env_host::storage::Storage)> {
+    pub fn finish(
+        &mut self,
+    ) -> Result<(
+        soroban_env_host::storage::Footprint,
+        soroban_env_host::storage::Storage,
+    )> {
         let dummy_env = Env::default();
         let dummy_addr = Address::generate(&dummy_env);
-        
+
         let old_env = std::mem::replace(&mut self.env, dummy_env);
         self.contract_address = dummy_addr;
-        
+
         let host = old_env.host().clone();
         drop(old_env);
 
         let (storage, _events) = host.try_finish().map_err(|e| {
-            crate::DebuggerError::ExecutionError(format!("Failed to finalize host execution tracking: {:?}", e))
+            crate::DebuggerError::ExecutionError(format!(
+                "Failed to finalize host execution tracking: {:?}",
+                e
+            ))
         })?;
 
         Ok((storage.footprint.clone(), storage))

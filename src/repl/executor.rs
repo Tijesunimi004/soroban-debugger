@@ -86,7 +86,7 @@ impl ReplExecutor {
         };
 
         serde_json::to_string(&values)
-            .map_err(|e| miette::miette!("Failed to serialize REPL arguments: {}", e).into())
+            .map_err(|e| miette::miette!("Failed to serialize REPL arguments: {}", e))
     }
 
     fn typed_repl_args(
@@ -138,7 +138,6 @@ impl ReplExecutor {
             "value": address,
         }))
     }
-
 
     /// Inspect and display contract storage
     pub fn inspect_storage(&self) -> Result<()> {
@@ -219,15 +218,11 @@ mod tests {
 
     #[test]
     fn repl_args_parse_json_literals() {
-        let values: Vec<Value> = [
-            "100",
-            "true",
-            "{\"type\":\"u32\",\"value\":7}",
-        ]
-        .iter()
-        .map(|s| parse_repl_arg(s))
-        .collect::<Result<_>>()
-        .unwrap();
+        let values: Vec<Value> = ["100", "true", "{\"type\":\"u32\",\"value\":7}"]
+            .iter()
+            .map(|s| parse_repl_arg(s))
+            .collect::<Result<_>>()
+            .unwrap();
         let json = serde_json::to_string(&values).unwrap();
         assert_eq!(json, "[100,true,{\"type\":\"u32\",\"value\":7}]");
     }

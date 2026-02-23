@@ -372,36 +372,40 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
             Ok((footprint, storage)) => {
                 let mut footprint_map = std::collections::HashMap::new();
                 for (k, v) in &footprint.0 {
-                    footprint_map.insert(k.clone(), v.clone());
+                    footprint_map.insert(k.clone(), *v);
                 }
 
                 for (key, val_opt) in &storage.map {
                     if let Some(access_type) = footprint_map.get(key) {
-                            if let Some((entry, ttl)) = val_opt {
-                                let key_str = format!("{:?}", **key);
-                                let storage_type = if key_str.contains("Temporary") || key_str.contains("temporary") {
+                        if let Some((entry, ttl)) = val_opt {
+                            let key_str = format!("{:?}", **key);
+                            let storage_type =
+                                if key_str.contains("Temporary") || key_str.contains("temporary") {
                                     crate::inspector::ledger::StorageType::Temporary
-                                } else if key_str.contains("Instance") || key_str.contains("instance") || key_str.contains("LedgerKeyContractInstance") {
+                                } else if key_str.contains("Instance")
+                                    || key_str.contains("instance")
+                                    || key_str.contains("LedgerKeyContractInstance")
+                                {
                                     crate::inspector::ledger::StorageType::Instance
                                 } else {
                                     crate::inspector::ledger::StorageType::Persistent
                                 };
-                                
-                                use soroban_env_host::storage::AccessType;
-                                let is_read = true; // Everything in the footprint is at least read
-                                let is_write = matches!(*access_type, AccessType::ReadWrite);
-                                
-                                ledger_inspector.add_entry(
-                                    format!("{:?}", **key),
-                                    format!("{:?}", **entry),
-                                    storage_type,
-                                    ttl.unwrap_or(0),
-                                    is_read,
-                                    is_write,
-                                );
-                            }
+
+                            use soroban_env_host::storage::AccessType;
+                            let is_read = true; // Everything in the footprint is at least read
+                            let is_write = matches!(*access_type, AccessType::ReadWrite);
+
+                            ledger_inspector.add_entry(
+                                format!("{:?}", **key),
+                                format!("{:?}", **entry),
+                                storage_type,
+                                ttl.unwrap_or(0),
+                                is_read,
+                                is_write,
+                            );
                         }
                     }
+                }
             }
             Err(e) => {
                 print_warning(format!("Failed to extract ledger footprint: {}", e));
