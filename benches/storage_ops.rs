@@ -70,7 +70,7 @@ fn bench_storage_ops(c: &mut Criterion) {
                     contract: address.clone(),
                     key: key_val,
                     durability: ContractDataDurability::Persistent,
-                    val: ScVal::I32(i as i32),
+                    val: ScVal::I32(i),
                     ext: ExtensionPoint::V0,
                 }),
                 ext: LedgerEntryExt::V0,

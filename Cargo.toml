@@ -121,7 +121,9 @@ strip = true
 [[bin]]
 name = "soroban-debug"
 path = "src/main.rs"
+bench = false
 
 [lib]
 name = "soroban_debugger"
 path = "src/lib.rs"
+bench = false

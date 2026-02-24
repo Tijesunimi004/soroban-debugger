@@ -15,7 +15,7 @@ fn bench_contract_execution(c: &mut Criterion) {
 
     group.bench_function("counter_increment", |b| {
         b.iter(|| {
-            executor.env().budget().reset_unlimited();
+            executor.env().cost_estimate().budget().reset_unlimited();
             let result = executor
                 .execute(black_box("increment"), black_box(None))
                 .unwrap();
@@ -25,7 +25,7 @@ fn bench_contract_execution(c: &mut Criterion) {
 
     group.bench_function("counter_get", |b| {
         b.iter(|| {
-            executor.env().budget().reset_unlimited();
+            executor.env().cost_estimate().budget().reset_unlimited();
             let result = executor.execute(black_box("get"), black_box(None)).unwrap();
             black_box(result);
         })
