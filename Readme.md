@@ -665,12 +665,15 @@ cargo bench
 
 | Component | Operation | Time (Baseline) |
 |-----------|-----------|-----------------|
-| Runtime | WASM Loading (100KB) | ~15 µs |
+| Runtime | WASM Loading (counter.wasm) | ~2.8 ms |
+| Runtime | Contract Execution (avg) | ~1.6 ms |
 | Runtime | Breakpoint Check (100 set) | ~20 ns |
 | Runtime | Call Stack Push/Pop | ~50 ns |
-| Parser | Argument Parsing (Complex) | ~100 µs |
-| Inspector | Storage Snapshot (1000 items) | ~0.5 ns |
-| Inspector | Storage Diff (1000 items) | ~60 µs |
+| Parser | Argument Parsing (Complex) | ~14 µs |
+| Inspector | Storage Snapshot (1000 items) | ~230 µs |
+| Inspector | Storage Diff (1000 items) | ~240 µs |
+
+> **Note**: These benchmarks were conducted on a standard development machine. Actual times may vary based on environment and contract complexity.
 
 Benchmarks are run automatically in CI to ensure performance stays within acceptable bounds.
 

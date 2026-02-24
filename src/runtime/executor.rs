@@ -112,6 +112,10 @@ impl ContractExecutor {
         })
     }
 
+    pub fn env(&self) -> &Env {
+        &self.env
+    }
+
     pub fn set_timeout(&mut self, secs: u64) {
         self.timeout_secs = secs;
     }

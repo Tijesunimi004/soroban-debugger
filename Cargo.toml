@@ -88,7 +88,23 @@ proptest = "1.0"
 criterion = "0.5"
 
 [[bench]]
-name = "debugger_bench"
+name = "wasm_loading"
+harness = false
+
+[[bench]]
+name = "contract_execution"
+harness = false
+
+[[bench]]
+name = "argument_parsing"
+harness = false
+
+[[bench]]
+name = "storage_ops"
+harness = false
+
+[[bench]]
+name = "state_management"
 harness = false
 
 [build-dependencies]

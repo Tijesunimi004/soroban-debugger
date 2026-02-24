@@ -52,16 +52,30 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   bench:
-    name: Check Benchmarks
+    name: Benchmark Regression Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Needed to checkout main
       
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
       
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
+      
+      - name: Install critcmp
+        run: cargo install critcmp --version 0.1.7 || true # Ignore if already in cache
+      
+      - name: Run benchmarks (current)
+        run: cargo bench -- --save-baseline new
         
-      - name: Compile Benchmarks
-        run: cargo bench --workspace --no-run
+      - name: Checkout main and run benchmarks (baseline)
+        run: |
+          git checkout main
+          cargo bench -- --save-baseline base
+          git checkout -
+          
+      - name: Compare benchmarks and check for regressions (>10%)
+        run: critcmp base new --threshold 10
