@@ -1,8 +1,12 @@
 # Soroban Debugger
 
 [![CI](https://github.com/Timi16/soroban-debugger/actions/workflows/ci.yml/badge.svg)](https://github.com/Timi16/soroban-debugger/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/Timi16/soroban-debugger?logo=github)](https://github.com/Timi16/soroban-debugger/releases)
 
 A command-line debugger for Soroban smart contracts on the Stellar network. Debug your contracts interactively with breakpoints, step-through execution, state inspection, and budget tracking.
+
+Check out the [FAQ](docs/faq.md) for help with common issues.
+
 
 ## Features
 
@@ -680,24 +684,7 @@ Benchmarks are run automatically in CI to ensure performance stays within accept
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit issues and pull requests.
-
-### Development Setup
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests: `cargo test`
-5. Submit a pull request
-
-### Code Style
-
-This project follows standard Rust formatting:
-
-```bash
-cargo fmt
-cargo clippy
-```
+Contributions are welcome. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, workflow, code style, and PR guidelines.
 
 <!-- ## Roadmap
 
@@ -731,6 +718,7 @@ at your option.
 
 ## Resources
 
+- [FAQ](docs/faq.md) - Common problems and workarounds
 - Soroban Documentation: https://soroban.stellar.org/docs
 - Stellar Developer Discord: https://discord.gg/stellardev
 - Issue Tracker: https://github.com/Timi16/soroban-debugger/issues
