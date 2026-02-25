@@ -1,6 +1,7 @@
 # Soroban Debugger
 
 [![CI](https://github.com/Timi16/soroban-debugger/actions/workflows/ci.yml/badge.svg)](https://github.com/Timi16/soroban-debugger/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/Timi16/soroban-debugger/branch/main/graph/badge.svg)](https://codecov.io/gh/Timi16/soroban-debugger)
 [![Latest Release](https://img.shields.io/github/v/release/Timi16/soroban-debugger?logo=github)](https://github.com/Timi16/soroban-debugger/releases)
 
 A command-line debugger for Soroban smart contracts on the Stellar network. Debug your contracts interactively with breakpoints, step-through execution, state inspection, and budget tracking.
