@@ -12,9 +12,32 @@ edition = "2021"
 authors = ["Soroban Debugger Contributors"]
 description = "A debugging tool for Soroban smart contracts"
 repository = "https://github.com/Timi16/soroban-debugger"
+homepage = "https://github.com/Timi16/soroban-debugger"
+documentation = "https://docs.rs/soroban-debugger"
+readme = "README.md"
 license = "MIT OR Apache-2.0"
 keywords = ["stellar", "soroban", "debugger", "blockchain", "smart-contracts"]
 categories = ["development-tools::debugging", "command-line-utilities"]
+exclude = [
+    ".github/",
+    ".vscode/",
+    ".kiro/",
+    "docs/",
+    "examples/",
+    "test_snapshots/",
+    "fuzz/",
+    "benches/",
+    "extensions/",
+    ".dockerignore",
+    "docker-compose.yml",
+    "Dockerfile",
+    "cliff.toml",
+    "ARCHITECTURE.md",
+    "BATCH_EXECUTION_SUMMARY.md",
+    "CONTRIBUTING.md",
+    "CONTRIBUTION.md",
+    "test_snapshot.rs",
+]
 
 [dependencies]
 # Soroban SDK and runtime
