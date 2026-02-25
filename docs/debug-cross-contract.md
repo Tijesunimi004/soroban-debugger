@@ -2,7 +2,7 @@
 ```markdown
 # Debugging Cross-Contract Calls in Soroban
 
-This tutorial shows how to **debug contracts that call other contracts** in Soroban.  
+This tutorial shows how to **debug contracts that call other contracts** in Soroban.
 We’ll create a simple **caller + callee** example, set breakpoints in both contracts, and inspect the call stack and event logs.
 
 ---
@@ -12,7 +12,7 @@ We’ll create a simple **caller + callee** example, set breakpoints in both con
 ```
 
 examples/contracts/cross-contract/
-├── callee_contract.rs as there are no example contracts 
+├── callee_contract.rs as there are no example contracts
 ├── caller_contract.rs
 └── integration_test.rs
 
