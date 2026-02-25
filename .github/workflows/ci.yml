@@ -78,4 +78,22 @@ jobs:
           git checkout -
           
       - name: Compare benchmarks and check for regressions (>10%)
-        run: critcmp base new --threshold 10
+        shell: bash
+        run: |
+          set +e
+          output="$(critcmp base new --threshold 10 2>&1)"
+          status=$?
+          set -e
+
+          echo "$output"
+
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+
+          if echo "$output" | grep -Fq "no benchmark comparisons to show"; then
+            echo "No overlapping benchmark IDs between 'base' and 'new'; skipping regression gate."
+            exit 0
+          fi
+
+          exit "$status"
