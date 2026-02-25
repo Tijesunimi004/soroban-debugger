@@ -139,12 +139,10 @@ impl DebugServer {
                     self.engine.breakpoints_mut().remove(&function);
                     DebugResponse::Ok
                 }
-                DebugRequest::GetState => {
-                    match self.engine.state().lock() {
-                        Ok(state) => DebugResponse::State(state.clone()),
-                        Err(e) => DebugResponse::Error(format!("Failed to acquire state lock: {}", e)),
-                    }
-                }
+                DebugRequest::GetState => match self.engine.state().lock() {
+                    Ok(state) => DebugResponse::State(state.clone()),
+                    Err(e) => DebugResponse::Error(format!("Failed to acquire state lock: {}", e)),
+                },
                 DebugRequest::Execute { function, args } => {
                     match self.engine.execute(&function, args.as_deref()) {
                         Ok(res) => DebugResponse::ExecutionResult { result: res },

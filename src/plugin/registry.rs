@@ -250,7 +250,10 @@ impl Default for PluginRegistry {
     fn default() -> Self {
         // Use a fallback temporary directory if default creation fails
         Self::new().unwrap_or_else(|e| {
-            warn!("Failed to create default plugin registry: {}. Using temporary directory.", e);
+            warn!(
+                "Failed to create default plugin registry: {}. Using temporary directory.",
+                e
+            );
             let temp_dir = std::env::temp_dir().join("soroban-debugger-plugins");
             Self::with_plugin_dir(temp_dir)
                 .expect("Failed to create plugin registry even with temp directory")
