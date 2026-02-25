@@ -86,6 +86,7 @@ predicates = "3.0"
 tempfile = "3.8"
 proptest = "1.0"
 criterion = "0.5"
+jsonschema = "0.17"
 
 [[bench]]
 name = "wasm_loading"
