@@ -125,10 +125,8 @@ jobs:
           summary=$(cargo llvm-cov --workspace --all-features --summary-only 2>&1)
           echo "$summary"
           
-          # Save summary for PR comment
-          echo "COVERAGE_SUMMARY<<EOF" >> $GITHUB_OUTPUT
-          echo "$summary" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # Save summary to file for PR comment
+          echo "$summary" > coverage_summary.txt
           
           # Extract coverage percentage from the summary (look for "Total" line)
           coverage=$(echo "$summary" | grep -E "^\s+Total" | awk '{print $2}' | sed 's/%//' || echo "0")
@@ -174,7 +172,7 @@ jobs:
             <summary>Coverage Summary</summary>
             
             ```
-            ${{ steps.coverage.outputs.COVERAGE_SUMMARY }}
+            ${{ github.workspace }}/coverage_summary.txt
             ```
             
             </details>
