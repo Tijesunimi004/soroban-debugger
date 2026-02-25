@@ -9,6 +9,7 @@ fn test_json_output_schema_validation() {
     let schema_path = "tests/schemas/execution_output.json";
 
     // Run the debugger with --output json and --quiet to ensure only JSON is on stdout
+    #[allow(deprecated)]
     let mut cmd = Command::cargo_bin("soroban-debug").unwrap();
     let output = cmd
         .arg("--quiet")
@@ -32,8 +33,8 @@ fn test_json_output_schema_validation() {
     let stdout = String::from_utf8(output.stdout).expect("Stdout is not valid UTF-8");
 
     // We expect stdout to be valid JSON
-    let json_val: Value =
-        serde_json::from_str(&stdout).expect(&format!("Failed to parse JSON output: {}", stdout));
+    let json_val: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|_| panic!("Failed to parse JSON output: {}", stdout));
 
     // Load schema
     let schema_content = fs::read_to_string(schema_path).expect("Failed to read schema file");
