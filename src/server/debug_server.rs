@@ -140,8 +140,10 @@ impl DebugServer {
                     DebugResponse::Ok
                 }
                 DebugRequest::GetState => {
-                    let state = self.engine.state().lock().unwrap().clone();
-                    DebugResponse::State(state)
+                    match self.engine.state().lock() {
+                        Ok(state) => DebugResponse::State(state.clone()),
+                        Err(e) => DebugResponse::Error(format!("Failed to acquire state lock: {}", e)),
+                    }
                 }
                 DebugRequest::Execute { function, args } => {
                     match self.engine.execute(&function, args.as_deref()) {

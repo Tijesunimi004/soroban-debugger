@@ -99,3 +99,72 @@ jobs:
           fi
 
           exit "$status"
+
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+      
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      
+      - name: Generate coverage report
+        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+      
+      - name: Check coverage threshold
+        id: coverage
+        run: |
+          # Generate summary and extract coverage percentage
+          summary=$(cargo llvm-cov --workspace --all-features --summary-only 2>&1)
+          echo "$summary"
+          
+          # Extract coverage percentage from the summary (look for "Total" line)
+          coverage=$(echo "$summary" | grep -E "^\s+Total" | awk '{print $2}' | sed 's/%//' || echo "0")
+          
+          if [ -z "$coverage" ] || [ "$coverage" = "0" ]; then
+            echo "Warning: Could not extract coverage percentage, continuing..."
+            coverage="0"
+          fi
+          
+          echo "Current coverage: ${coverage}%"
+          echo "Required threshold: 60%"
+          echo "coverage=${coverage}" >> $GITHUB_OUTPUT
+          
+          # Compare coverage (using awk for floating point comparison)
+          meets_threshold=$(awk -v cov="$coverage" -v thresh="60" 'BEGIN {print (cov >= thresh)}')
+          
+          if [ "$meets_threshold" = "0" ]; then
+            echo "Coverage ${coverage}% is below the required 60% threshold"
+            exit 1
+          else
+            echo "Coverage ${coverage}% meets the required 60% threshold"
+          fi
+      
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./lcov.info
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+      
+      - name: Comment PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          recreate: true
+          message: |
+            ## Code Coverage Report
+            
+            **Coverage: ${{ steps.coverage.outputs.coverage }}%** (Required: 60%)
+            
+            View the full coverage report on [Codecov](https://codecov.io/gh/${{ github.repository }}/commit/${{ github.sha }}).
+            
+            Coverage details are available in the [CI logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}).

@@ -82,9 +82,9 @@ impl ContractExecutor {
         let _guard = ProgressGuard(pb);
 
         let env = Env::default();
-        env.host()
-            .set_diagnostic_level(DiagnosticLevel::Debug)
-            .expect("Failed to set diagnostic level");
+        if let Err(e) = env.host().set_diagnostic_level(DiagnosticLevel::Debug) {
+            return Err(miette::miette!("Failed to set diagnostic level: {}", e));
+        }
 
         // Simulate progress during WASM registration
         _guard.0.set_position(50);
