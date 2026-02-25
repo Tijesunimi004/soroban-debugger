@@ -69,12 +69,12 @@ jobs:
         run: cargo install critcmp --version 0.1.7 || true # Ignore if already in cache
       
       - name: Run benchmarks (current)
-        run: cargo bench -- --save-baseline new
+        run: cargo bench -- --save-baseline new --noplot
         
       - name: Checkout main and run benchmarks (baseline)
         run: |
           git checkout main
-          cargo bench -- --save-baseline base
+          cargo bench -- --save-baseline base --noplot
           git checkout -
           
       - name: Compare benchmarks and check for regressions (>10%)
