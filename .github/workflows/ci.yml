@@ -115,8 +115,6 @@ jobs:
       
       - name: Generate coverage report
         run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
-        env:
-          CARGO_LLVM_COV_FLAGS: --locked
       
       - name: Check coverage threshold
         id: coverage
