@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Test helper for Soroban contract development"
 license = "MIT OR Apache-2.0"
+publish = false
 
 [dependencies]
 soroban-sdk = { version = "22.0.0", features = ["testutils"] }

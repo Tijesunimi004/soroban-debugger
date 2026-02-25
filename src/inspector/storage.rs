@@ -513,7 +513,7 @@ impl StorageInspector {
 }
 
 /// Represents the differences between two storage states
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct StorageDiff {
     pub added: HashMap<String, String>,
     pub modified: HashMap<String, (String, String)>,

@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ExecutionOutput",
+  "type": "object",
+  "required": ["status", "result", "sha256", "budget", "storage_diff"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["success", "error"]
+    },
+    "result": {
+      "type": ["string", "null"]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "budget": {
+      "type": "object",
+      "required": ["cpu_instructions", "memory_bytes"],
+      "properties": {
+        "cpu_instructions": { "type": "integer" },
+        "memory_bytes": { "type": "integer" }
+      }
+    },
+    "storage_diff": {
+      "type": "object",
+      "required": ["added", "modified", "deleted"],
+      "properties": {
+        "added": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "modified": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "deleted": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "triggered_alerts": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["topics", "data"],
+        "properties": {
+          "contract_id": { "type": ["string", "null"] },
+          "topics": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "data": { "type": "string" }
+        }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

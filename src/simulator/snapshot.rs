@@ -144,8 +144,12 @@ impl SnapshotDiff {
         }
 
         for addr in before_addresses.intersection(&after_addresses) {
-            let before_acc = before.get_account(addr).unwrap();
-            let after_acc = after.get_account(addr).unwrap();
+            let Some(before_acc) = before.get_account(addr) else {
+                continue; // Skip if account not found (shouldn't happen)
+            };
+            let Some(after_acc) = after.get_account(addr) else {
+                continue; // Skip if account not found (shouldn't happen)
+            };
 
             let account_diff = AccountDiff {
                 address: addr.clone(),
@@ -187,8 +191,12 @@ impl SnapshotDiff {
         }
 
         for id in before_contracts.intersection(&after_contracts) {
-            let before_contract = before.get_contract(id).unwrap();
-            let after_contract = after.get_contract(id).unwrap();
+            let Some(before_contract) = before.get_contract(id) else {
+                continue; // Skip if contract not found (shouldn't happen)
+            };
+            let Some(after_contract) = after.get_contract(id) else {
+                continue; // Skip if contract not found (shouldn't happen)
+            };
 
             let storage_changed = before_contract.storage != after_contract.storage;
 
