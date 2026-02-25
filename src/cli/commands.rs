@@ -38,7 +38,9 @@ fn print_warning(message: impl AsRef<str>) {
 
 /// Print the final contract return value — always shown regardless of verbosity.
 fn print_result(message: impl AsRef<str>) {
-    println!("{}", Formatter::success(message));
+    if !Formatter::is_quiet() {
+        println!("{}", Formatter::success(message));
+    }
 }
 
 /// Print verbose-only detail — only shown when --verbose is active.
@@ -135,13 +137,7 @@ fn run_batch(args: &RunArgs, batch_file: &std::path::Path) -> Result<()> {
 
     crate::batch::BatchExecutor::display_results(&results, &summary);
 
-    if args.json
-        || args
-            .format
-            .as_deref()
-            .map(|f| f.eq_ignore_ascii_case("json"))
-            .unwrap_or(false)
-    {
+    if args.is_json_output() {
         let output = serde_json::json!({
             "results": results,
             "summary": summary,
@@ -281,7 +277,7 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
         executor.set_mock_specs(&args.mock)?;
     }
 
-    let mut engine = DebuggerEngine::new(executor, args.breakpoint);
+    let mut engine = DebuggerEngine::new(executor, args.breakpoint.clone());
 
     // Server and remote modes are not yet implemented
     if args.server {
@@ -299,7 +295,9 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     }
 
     // Execute locally with debugging
-    println!("\n--- Execution Start ---\n");
+    if !args.is_json_output() {
+        println!("\n--- Execution Start ---\n");
+    }
     if args.instruction_debug {
         print_info("Enabling instruction-level debugging...");
         engine.enable_instruction_debug(&wasm_bytes)?;
@@ -524,17 +522,16 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
         json_ledger = Some(ledger_inspector);
     }
 
-    if args.json
-        || args
-            .format
-            .as_deref()
-            .map(|f| f.eq_ignore_ascii_case("json"))
-            .unwrap_or(false)
-    {
+    if args.is_json_output() {
         let mut output = serde_json::json!({
+            "status": "success",
             "result": result,
             "sha256": wasm_hash,
-            "alerts": storage_diff.triggered_alerts,
+            "budget": {
+                "cpu_instructions": budget.cpu_instructions,
+                "memory_bytes": budget.memory_bytes,
+            },
+            "storage_diff": storage_diff,
         });
 
         if let Some(ref events) = json_events {
@@ -563,12 +560,18 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
             output["ledger_entries"] = ledger.to_json();
         }
 
-        logging::log_display(
-            serde_json::to_string_pretty(&output).map_err(|e| {
-                DebuggerError::FileError(format!("Failed to serialize output: {}", e))
-            })?,
-            logging::LogLevel::Info,
-        );
+        match serde_json::to_string_pretty(&output) {
+            Ok(json) => println!("{}", json),
+            Err(e) => {
+                let err_output = serde_json::json!({
+                    "status": "error",
+                    "errors": [format!("Failed to serialize output: {}", e)]
+                });
+                if let Ok(err_json) = serde_json::to_string_pretty(&err_output) {
+                    println!("{}", err_json);
+                }
+            }
+        }
     }
 
     if let Some(trace_path) = &args.trace_output {
