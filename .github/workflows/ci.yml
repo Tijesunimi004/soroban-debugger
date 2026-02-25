@@ -141,10 +141,10 @@ jobs:
           meets_threshold=$(awk -v cov="$coverage" -v thresh="60" 'BEGIN {print (cov >= thresh)}')
           
           if [ "$meets_threshold" = "0" ]; then
-            echo "❌ Coverage ${coverage}% is below the required 60% threshold"
+            echo "Coverage ${coverage}% is below the required 60% threshold"
             exit 1
           else
-            echo "✅ Coverage ${coverage}% meets the required 60% threshold"
+            echo "Coverage ${coverage}% meets the required 60% threshold"
           fi
       
       - name: Upload to Codecov
@@ -161,7 +161,7 @@ jobs:
         with:
           recreate: true
           message: |
-            ## 📊 Code Coverage Report
+            ## Code Coverage Report
             
             **Coverage: ${{ steps.coverage.outputs.coverage }}%** (Required: 60%)
             
