@@ -394,6 +394,46 @@ pub struct InteractiveArgs {
     #[arg(long, hide = true, alias = "snapshot")]
     pub snapshot: Option<PathBuf>,
 
+    /// Function name to execute (staged; use 'continue' inside the session)
+    #[arg(short, long)]
+    pub function: String,
+
+    /// Function arguments as JSON array (e.g., '["arg1", "arg2"]')
+    #[arg(short, long)]
+    pub args: Option<String>,
+
+    /// Initial storage state as JSON object
+    #[arg(short, long)]
+    pub storage: Option<String>,
+
+    /// Import storage state from JSON file before starting the session
+    #[arg(long)]
+    pub import_storage: Option<PathBuf>,
+
+    /// Set breakpoint at function name
+    #[arg(short, long)]
+    pub breakpoint: Vec<String>,
+
+    /// Mock cross-contract return: CONTRACT_ID.function=return_value (repeatable)
+    #[arg(long, value_name = "CONTRACT_ID.function=return_value")]
+    pub mock: Vec<String>,
+
+    /// Execution timeout in seconds (default: 30)
+    #[arg(long, default_value = "30")]
+    pub timeout: u64,
+
+    /// Enable instruction-level debugging
+    #[arg(long)]
+    pub instruction_debug: bool,
+
+    /// Start with instruction stepping enabled
+    #[arg(long)]
+    pub step_instructions: bool,
+
+    /// Step mode for instruction debugging (into, over, out, block)
+    #[arg(long, default_value = "into")]
+    pub step_mode: String,
+
     /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
     #[arg(long)]
     pub expected_hash: Option<String>,

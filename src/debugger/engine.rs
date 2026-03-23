@@ -139,6 +139,18 @@ impl DebuggerEngine {
         self.paused = true;
     }
 
+    /// Stage an execution so the debugger starts in a paused state without
+    /// emitting a breakpoint log event.
+    pub fn stage_execution(&mut self, function: &str, args: Option<&str>) {
+        if let Ok(mut state) = self.state.lock() {
+            state.set_current_function(function.to_string(), args.map(str::to_string));
+            state.call_stack_mut().clear();
+            state.call_stack_mut().push(function.to_string(), None);
+        }
+
+        self.paused = true;
+    }
+
     fn update_call_stack(&mut self, total_duration: std::time::Duration) -> Result<()> {
         let events = self.executor.get_diagnostic_events()?;
 

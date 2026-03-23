@@ -16,6 +16,7 @@ use crate::repl::ReplConfig;
 use crate::runtime::executor::ContractExecutor;
 use crate::simulator::SnapshotLoader;
 use crate::ui::formatter::Formatter;
+use crate::ui::DebuggerUI;
 use crate::{DebuggerError, Result};
 use miette::WrapErr;
 use std::fs;
@@ -1534,9 +1535,84 @@ pub fn remote(args: RemoteArgs, _verbosity: Verbosity) -> Result<()> {
 }
 /// Launch interactive debugger UI
 pub fn interactive(args: InteractiveArgs, _verbosity: Verbosity) -> Result<()> {
-    print_info("Interactive mode is not yet implemented in this build");
-    print_info(format!("Contract: {:?}", args.contract));
-    Err(DebuggerError::ExecutionError("Interactive mode not yet implemented".to_string()).into())
+    print_info(format!("Loading contract: {:?}", args.contract));
+    logging::log_loading_contract(&args.contract.to_string_lossy());
+
+    let wasm_file = crate::utils::wasm::load_wasm(&args.contract)
+        .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
+    let wasm_bytes = wasm_file.bytes;
+    let wasm_hash = wasm_file.sha256_hash;
+
+    if let Some(expected) = &args.expected_hash {
+        if expected.to_lowercase() != wasm_hash {
+            return Err(crate::DebuggerError::ChecksumMismatch {
+                expected: expected.clone(),
+                actual: wasm_hash.clone(),
+            }
+            .into());
+        }
+    }
+
+    print_success(format!(
+        "Contract loaded successfully ({} bytes)",
+        wasm_bytes.len()
+    ));
+
+    if let Some(snapshot_path) = &args.network_snapshot {
+        print_info(format!("Loading network snapshot: {:?}", snapshot_path));
+        logging::log_loading_snapshot(&snapshot_path.to_string_lossy());
+        let loader = SnapshotLoader::from_file(snapshot_path)?;
+        let loaded_snapshot = loader.apply_to_environment()?;
+        logging::log_display(loaded_snapshot.format_summary(), logging::LogLevel::Info);
+    }
+
+    let parsed_args = if let Some(args_json) = &args.args {
+        Some(parse_args(args_json)?)
+    } else {
+        None
+    };
+
+    let mut initial_storage = if let Some(storage_json) = &args.storage {
+        Some(parse_storage(storage_json)?)
+    } else {
+        None
+    };
+
+    if let Some(import_path) = &args.import_storage {
+        print_info(format!("Importing storage from: {:?}", import_path));
+        let imported = crate::inspector::storage::StorageState::import_from_file(import_path)?;
+        print_success(format!("Imported {} storage entries", imported.len()));
+        initial_storage = Some(serde_json::to_string(&imported).map_err(|e| {
+            DebuggerError::StorageError(format!("Failed to serialize imported storage: {}", e))
+        })?);
+    }
+
+    let mut executor = ContractExecutor::new(wasm_bytes.clone())?;
+    executor.set_timeout(args.timeout);
+
+    if let Some(storage) = initial_storage {
+        executor.set_initial_storage(storage)?;
+    }
+    if !args.mock.is_empty() {
+        executor.set_mock_specs(&args.mock)?;
+    }
+
+    let mut engine = DebuggerEngine::new(executor, args.breakpoint.clone());
+
+    if args.instruction_debug {
+        print_info("Enabling instruction-level debugging...");
+        engine.enable_instruction_debug(&wasm_bytes)?;
+
+        if args.step_instructions {
+            let step_mode = parse_step_mode(&args.step_mode);
+            engine.start_instruction_stepping(step_mode)?;
+        }
+    }
+
+    print_info("Starting interactive session (type 'help' for commands)");
+    let mut ui = DebuggerUI::new(engine)?;
+    ui.queue_execution(args.function.clone(), parsed_args);
+    ui.run()
 }
 
 /// Launch TUI debugger

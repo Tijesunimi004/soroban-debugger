@@ -3,10 +3,19 @@ use crate::inspector::{BudgetInspector, StorageInspector};
 use crate::Result;
 use std::io::{self, Write};
 
+#[derive(Debug, Clone)]
+struct PendingExecution {
+    function: String,
+    args: Option<String>,
+}
+
 /// Terminal user interface for interactive debugging.
 pub struct DebuggerUI {
     engine: DebuggerEngine,
     storage_inspector: StorageInspector,
+    pending_execution: Option<PendingExecution>,
+    last_output: Option<String>,
+    last_error: Option<String>,
 }
 
 impl DebuggerUI {
@@ -14,7 +23,28 @@ impl DebuggerUI {
         Ok(Self {
             engine,
             storage_inspector: StorageInspector::new(),
+            pending_execution: None,
+            last_output: None,
+            last_error: None,
         })
+    }
+
+    /// Stage an execution so the session starts "paused" before running.
+    ///
+    /// Use `continue` to execute the staged call.
+    pub fn queue_execution(&mut self, function: String, args: Option<String>) {
+        self.engine.stage_execution(&function, args.as_deref());
+        self.pending_execution = Some(PendingExecution { function, args });
+        self.last_output = None;
+        self.last_error = None;
+    }
+
+    pub fn last_output(&self) -> Option<&str> {
+        self.last_output.as_deref()
+    }
+
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
     }
 
     /// Run the interactive UI loop.
@@ -52,7 +82,7 @@ impl DebuggerUI {
         Ok(())
     }
 
-    fn handle_command(&mut self, command: &str) -> Result<bool> {
+    pub fn handle_command(&mut self, command: &str) -> Result<bool> {
         let parts: Vec<&str> = command.split_whitespace().collect();
         if parts.is_empty() {
             return Ok(false);
@@ -66,11 +96,48 @@ impl DebuggerUI {
                 }
             }
             "c" | "continue" => {
-                self.engine.continue_execution()?;
-                tracing::info!("Execution continuing");
+                if let Some(pending) = self.pending_execution.take() {
+                    match self
+                        .engine
+                        .execute_without_breakpoints(&pending.function, pending.args.as_deref())
+                    {
+                        Ok(output) => {
+                            self.last_error = None;
+                            self.last_output = Some(output.clone());
+                            crate::logging::log_display(
+                                format!("Result: {}", output),
+                                crate::logging::LogLevel::Info,
+                            );
+                        }
+                        Err(e) => {
+                            self.last_output = None;
+                            self.last_error = Some(e.to_string());
+                            crate::logging::log_display(
+                                format!("Error: {}", e),
+                                crate::logging::LogLevel::Error,
+                            );
+                        }
+                    }
+                } else {
+                    self.engine.continue_execution()?;
+                    tracing::info!("Execution continuing");
+                }
             }
             "i" | "inspect" => {
                 self.inspect();
+            }
+            "run" => {
+                if parts.len() < 2 {
+                    tracing::warn!("run command missing function name");
+                } else {
+                    let function = parts[1].to_string();
+                    let args = if parts.len() > 2 {
+                        Some(parts[2..].join(" "))
+                    } else {
+                        None
+                    };
+                    self.queue_execution(function, args);
+                }
             }
             "storage" => {
                 self.storage_inspector.display();
@@ -146,6 +213,17 @@ impl DebuggerUI {
                 format!("Paused: {}", self.engine.is_paused()),
                 crate::logging::LogLevel::Info,
             );
+            if let Some(output) = &self.last_output {
+                crate::logging::log_display(
+                    format!("Last result: {}", output),
+                    crate::logging::LogLevel::Info,
+                );
+            } else if let Some(error) = &self.last_error {
+                crate::logging::log_display(
+                    format!("Last error: {}", error),
+                    crate::logging::LogLevel::Info,
+                );
+            }
             crate::logging::log_display("", crate::logging::LogLevel::Info);
             state.call_stack().display();
         } else {
@@ -168,6 +246,10 @@ impl DebuggerUI {
         );
         crate::logging::log_display(
             "  inspect | i        Show current state",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  run <func> [args]  Stage a function call",
             crate::logging::LogLevel::Info,
         );
         crate::logging::log_display(
