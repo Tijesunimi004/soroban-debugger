@@ -137,6 +137,8 @@ pub enum DebugRequest {
         args: Option<String>,
     },
 
+    /// Step execution (instruction-level)
+    Step,
     /// Step into next inline/instruction
     StepIn,
 
@@ -145,6 +147,9 @@ pub enum DebugRequest {
 
     /// Step out of current function
     StepOut,
+
+    /// Step over to next source line in the same frame
+    StepOverLine,
 
     /// Continue execution
     Continue,
@@ -236,6 +241,14 @@ pub enum DebugResponse {
         current_function: Option<String>,
         step_count: u64,
         source_location: Option<SourceLocation>,
+    },
+
+    /// Source-level step-over result
+    StepOverLineResult {
+        paused: bool,
+        file: Option<String>,
+        line: Option<u32>,
+        column: Option<u32>,
     },
 
     /// Continue result

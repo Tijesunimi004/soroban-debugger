@@ -729,8 +729,11 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
 
         match engine.executor_mut().finish() {
             Ok((footprint, storage)) => {
+                #[allow(clippy::clone_on_copy)]
                 let mut footprint_map = std::collections::HashMap::new();
                 for (k, v) in &footprint.0 {
+                    #[allow(clippy::clone_on_copy)]
+                    footprint_map.insert(k.clone(), v.clone());
                     footprint_map.insert(k.clone(), *v);
                 }
 

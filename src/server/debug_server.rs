@@ -1,3 +1,5 @@
+use crate::debugger::engine::{DebuggerEngine, StepOverResult};
+use crate::runtime::executor::ContractExecutor;
 use crate::debugger::engine::DebuggerEngine;
 use crate::inspector::budget::BudgetInspector;
 use crate::server::protocol::{
@@ -436,6 +438,50 @@ impl DebugServer {
                             }
                         }
                     }
+                }
+            }
+
+            DebugRequest::StepOverLine => {
+                if let Some(engine) = &session.engine {
+                    let mut engine = engine.lock().map_err(|e| {
+                        DebuggerError::ExecutionError(format!("Failed to lock engine: {}", e))
+                    })?;
+
+                    match engine.step_over_source_line() {
+                        Ok(StepOverResult { paused, location }) => {
+                            DebugResponse::StepOverLineResult {
+                                paused,
+                                file: location
+                                    .as_ref()
+                                    .map(|l| l.file.to_string_lossy().into_owned()),
+                                line: location.as_ref().map(|l| l.line),
+                                column: location.and_then(|l| l.column),
+                            }
+                        }
+                        Err(e) => DebugResponse::Error {
+                            message: format!("StepOverLine failed: {}", e),
+                        },
+                    }
+                } else {
+                    DebugResponse::Error {
+                        message: "No contract loaded".to_string(),
+                    }
+                }
+            }
+
+            DebugRequest::Continue => {
+                if let Some(engine) = &session.engine {
+                    let mut engine = engine.lock().map_err(|e| {
+                        DebuggerError::ExecutionError(format!("Failed to lock engine: {}", e))
+                    })?;
+
+                    match engine.continue_execution() {
+                        Ok(_) => {
+                            // Execution completed
+                            DebugResponse::ContinueResult {
+                                completed: true,
+                                output: None,
+                                error: None,
                     None => DebugResponse::Error {
                         message: "No contract loaded".to_string(),
                     },
