@@ -524,6 +524,7 @@ impl ContractExecutor {
                 function: None,
                 storage_key: Some(access.key.clone()),
                 storage_value: value,
+                call_depth: 0,
             });
         }
 
@@ -535,6 +536,7 @@ impl ContractExecutor {
                 function: Some(call.callee.clone()),
                 storage_key: None,
                 storage_value: None,
+                call_depth: 0,
             });
         }
 
@@ -548,6 +550,7 @@ impl ContractExecutor {
                 function: None,
                 storage_key: None,
                 storage_value: None,
+                call_depth: 0,
             });
             next_sequence += 1;
         }

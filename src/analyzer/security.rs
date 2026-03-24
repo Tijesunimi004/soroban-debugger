@@ -335,7 +335,7 @@ impl SecurityRule for ReentrancyPatternRule {
         "reentrancy-pattern"
     }
     fn description(&self) -> &str {
-        "Detects cross-contract calls followed by storage writes."
+        "Detects cross-contract calls followed by storage writes in the same call frame."
     }
 
     fn analyze_dynamic(
@@ -343,26 +343,44 @@ impl SecurityRule for ReentrancyPatternRule {
         _executor: &ContractExecutor,
         trace: &[DynamicTraceEvent],
     ) -> Result<Vec<SecurityFinding>> {
-        let mut findings = Vec::new();
-        let mut cross_call_seen = false;
-
-        for entry in trace {
-            if entry.kind == DynamicTraceEventKind::CrossContractCall {
-                cross_call_seen = true;
-            }
-            if cross_call_seen && entry.kind == DynamicTraceEventKind::StorageWrite {
-                findings.push(SecurityFinding {
-                    rule_id: self.name().to_string(),
-                    severity: Severity::Medium,
-                    location: format!("Trace event {}", entry.sequence),
-                    description: "Storage write detected after an external contract call. Possible reentrancy risk.".to_string(),
-                    remediation: "Follow checks-effects-interactions: finalize state before external calls.".to_string(),
-                });
-                break;
-            }
-        }
-        Ok(findings)
+        Ok(analyze_reentrancy_dynamic(trace))
     }
+}
+
+/// Core reentrancy detection: flags a StorageWrite only when it occurs at the
+/// same call_depth as a preceding CrossContractCall (same call frame).
+/// Writes inside a callee (deeper depth) are safe and not flagged.
+/// Pending depths are evicted when execution returns to the same or shallower
+/// frame (any non-CrossContractCall event at depth <= recorded depth means the
+/// call has returned), preventing false positives from unrelated later writes.
+fn analyze_reentrancy_dynamic(trace: &[DynamicTraceEvent]) -> Vec<SecurityFinding> {
+    let mut pending_depths: Vec<u32> = Vec::new();
+    for entry in trace {
+        match entry.kind {
+            DynamicTraceEventKind::CrossContractCall => {
+                pending_depths.push(entry.call_depth);
+            }
+            DynamicTraceEventKind::CrossContractReturn => {
+                // The call at this depth has returned; evict it.
+                if let Some(pos) = pending_depths.iter().rposition(|&d| d == entry.call_depth) {
+                    pending_depths.remove(pos);
+                }
+            }
+            DynamicTraceEventKind::StorageWrite => {
+                if pending_depths.contains(&entry.call_depth) {
+                    return vec![SecurityFinding {
+                        rule_id: "reentrancy-pattern".to_string(),
+                        severity: Severity::Medium,
+                        location: format!("Trace event {}", entry.sequence),
+                        description: "Storage write detected after an external contract call in the same call frame. Possible reentrancy risk.".to_string(),
+                        remediation: "Follow checks-effects-interactions: finalize state before external calls.".to_string(),
+                    }];
+                }
+            }
+            _ => {}
+        }
+    }
+    Vec::new()
 }
 
 struct CrossContractImportRule;
@@ -996,6 +1014,82 @@ mod tests {
         assert!(!ArithmeticCheckRule::is_guarded(&instrs, 1));
     }
 
+    // -----------------------------------------------------------------------
+    // ReentrancyPatternRule — call-frame correlation tests
+    // -----------------------------------------------------------------------
+
+    fn make_event(seq: usize, kind: DynamicTraceEventKind, depth: u32) -> DynamicTraceEvent {
+        DynamicTraceEvent {
+            sequence: seq,
+            kind,
+            message: String::new(),
+            function: None,
+            storage_key: None,
+            storage_value: None,
+            call_depth: depth,
+        }
+    }
+
+    /// Safe pattern: cross-contract call at depth 0, storage write happens
+    /// inside the callee at depth 1 (different frame) — must produce NO finding.
+    #[test]
+    fn reentrancy_no_finding_for_write_in_callee_frame() {
+        let trace = vec![
+            make_event(0, DynamicTraceEventKind::CrossContractCall, 0),
+            make_event(1, DynamicTraceEventKind::StorageWrite, 1),
+        ];
+        assert!(
+            analyze_reentrancy_dynamic(&trace).is_empty(),
+            "write in callee frame must not be flagged as reentrancy"
+        );
+    }
+
+    /// Safe pattern: cross-contract call at depth 0, callee returns (depth drops
+    /// back to 0 via a FunctionCall event), then a write at depth 0 in a later
+    /// unrelated function — must produce NO finding.
+    #[test]
+    fn reentrancy_no_finding_for_write_after_call_returned() {
+        let trace = vec![
+            make_event(0, DynamicTraceEventKind::CrossContractCall, 0),
+            make_event(1, DynamicTraceEventKind::StorageWrite, 1),
+            make_event(2, DynamicTraceEventKind::CrossContractReturn, 0),
+            make_event(3, DynamicTraceEventKind::StorageWrite, 0),
+        ];
+        assert!(
+            analyze_reentrancy_dynamic(&trace).is_empty(),
+            "write after call has returned must not be flagged"
+        );
+    }
+
+    /// Safe pattern: callee writes at depth 1, then caller writes at depth 0
+    /// after an explicit CrossContractReturn — must produce NO finding.
+    #[test]
+    fn reentrancy_no_finding_for_write_after_callee_write_and_return() {
+        let trace = vec![
+            make_event(0, DynamicTraceEventKind::CrossContractCall, 0),
+            make_event(1, DynamicTraceEventKind::StorageWrite, 1),
+            make_event(2, DynamicTraceEventKind::CrossContractReturn, 0),
+            make_event(3, DynamicTraceEventKind::StorageWrite, 0),
+        ];
+        assert!(
+            analyze_reentrancy_dynamic(&trace).is_empty(),
+            "write at depth 0 after explicit return must not be flagged"
+        );
+    }
+
+    /// Unsafe pattern: cross-contract call at depth 0, storage write also at
+    /// depth 0 (same frame, after the call) — must produce exactly one finding.
+    #[test]
+    fn reentrancy_finding_for_write_in_same_frame_after_cross_call() {
+        let trace = vec![
+            make_event(0, DynamicTraceEventKind::CrossContractCall, 0),
+            make_event(1, DynamicTraceEventKind::StorageWrite, 0),
+        ];
+        let findings = analyze_reentrancy_dynamic(&trace);
+        assert_eq!(findings.len(), 1, "write in same frame after cross-contract call must be flagged");
+        assert_eq!(findings[0].rule_id, "reentrancy-pattern");
+    }
+
     // Pre-existing tests (unchanged)
 
     #[test]
@@ -1009,6 +1103,7 @@ mod tests {
                 function: Some("sweep".to_string()),
                 storage_key: Some(format!("user:{}", i % 4)),
                 storage_value: None,
+                call_depth: 0,
             });
         }
 
