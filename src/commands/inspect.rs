@@ -60,6 +60,12 @@ struct FunctionListing {
 }
 
 #[derive(Serialize)]
+struct SourceMapReport {
+    mappings_count: usize,
+    diagnostics: Vec<crate::debugger::source_map::SourceMapDiagnostic>,
+}
+
+#[derive(Serialize)]
 struct FullReport {
     file: String,
     size_bytes: usize,
@@ -67,6 +73,7 @@ struct FullReport {
     functions: Vec<String>,
     signatures: Vec<crate::utils::wasm::FunctionSignature>,
     metadata: crate::utils::wasm::ContractMetadata,
+    source_map: SourceMapReport,
 }
 
 fn output_functions(path: &Path, wasm_bytes: &[u8], format: OutputFormat) -> Result<()> {
@@ -135,6 +142,9 @@ fn print_json_report(path: &Path, wasm_bytes: &[u8]) -> Result<()> {
     let signatures = parse_function_signatures(wasm_bytes)?;
     let metadata = extract_contract_metadata(wasm_bytes)?;
 
+    let mut source_map = crate::debugger::source_map::SourceMap::new();
+    let _ = source_map.load(wasm_bytes);
+
     let report = FullReport {
         file: path.display().to_string(),
         size_bytes: wasm_bytes.len(),
@@ -142,6 +152,10 @@ fn print_json_report(path: &Path, wasm_bytes: &[u8]) -> Result<()> {
         functions,
         signatures,
         metadata,
+        source_map: SourceMapReport {
+            mappings_count: source_map.len(),
+            diagnostics: source_map.diagnostics.clone(),
+        },
     };
 
     crate::logging::log_display(
@@ -234,6 +248,24 @@ fn print_report(path: &Path, wasm_bytes: &[u8]) -> Result<()> {
         log_both_if_some("Author / Org", &metadata.author);
         log_both_if_some("Description", &metadata.description);
         log_both_if_some("Implementation", &metadata.implementation);
+    }
+    log_both("");
+
+    section_header("Source Map (DWARF)");
+    let mut source_map = crate::debugger::source_map::SourceMap::new();
+    let _ = source_map.load(wasm_bytes);
+
+    if source_map.is_empty() && source_map.diagnostics.is_empty() {
+        log_both("  No DWARF debug information found in this contract.");
+    } else {
+        log_both(&format!("  Mapped Executable Lines : {}", source_map.len().to_string().bright_white()));
+        if !source_map.diagnostics.is_empty() {
+            log_both("");
+            log_both(&format!("  {}", "⚠ Diagnostics / Warnings:".yellow().bold()));
+            for diag in &source_map.diagnostics {
+                log_both(&format!("    - {}", diag.message.yellow()));
+            }
+        }
     }
 
     log_both(&heavy);
