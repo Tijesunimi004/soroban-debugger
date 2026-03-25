@@ -1,532 +1,339 @@
-use crate::{DebuggerError, Result};
-use serde_json::Value;
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Operator {
-    Eq,
-    Ne,
-    Gt,
-    Ge,
-    Lt,
-    Le,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Condition {
-    Storage {
-        key: String,
-        operator: Operator,
-        value: String,
-    },
-    Argument {
-        name: String,
-        operator: Operator,
-        value: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HitCondition {
-    Eq(u64),
-    Ge(u64),
-    Gt(u64),
-    Le(u64),
-    Lt(u64),
-    MultipleOf(u64),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BreakpointSpec {
-    pub id: String,
+/// Represents a single breakpoint with optional conditions and logging
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Breakpoint {
+    /// Function name where the breakpoint is set
     pub function: String,
-    pub condition: Option<Condition>,
-    pub hit_condition: Option<HitCondition>,
-    pub log_message: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BreakpointSummary {
-    pub id: String,
-    pub function: String,
+    /// Optional condition expression (e.g., "balance > 1000")
     pub condition: Option<String>,
+    /// Optional hit condition (e.g., ">5", "==3", "%2==0")
     pub hit_condition: Option<String>,
+    /// Optional log message with variable interpolation (e.g., "Balance: {balance}")
     pub log_message: Option<String>,
+    /// Number of times this breakpoint has been hit
+    pub hit_count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BreakpointHit {
-    pub should_pause: bool,
-    pub matched_ids: Vec<String>,
-    pub log_messages: Vec<String>,
+impl Breakpoint {
+    /// Create a simple breakpoint without conditions
+    pub fn simple(function: String) -> Self {
+        Self {
+            function,
+            condition: None,
+            hit_condition: None,
+            log_message: None,
+            hit_count: 0,
+        }
+    }
+
+    /// Create a breakpoint with a condition
+    pub fn with_condition(function: String, condition: String) -> Self {
+        Self {
+            function,
+            condition: Some(condition),
+            hit_condition: None,
+            log_message: None,
+            hit_count: 0,
+        }
+    }
+
+    /// Create a breakpoint with a hit condition
+    pub fn with_hit_condition(function: String, hit_condition: String) -> Self {
+        Self {
+            function,
+            condition: None,
+            hit_condition: Some(hit_condition),
+            log_message: None,
+            hit_count: 0,
+        }
+    }
+
+    /// Create a log point (breakpoint that doesn't pause, just logs)
+    pub fn log_point(function: String, log_message: String) -> Self {
+        Self {
+            function,
+            condition: None,
+            hit_condition: None,
+            log_message: Some(log_message),
+            hit_count: 0,
+        }
+    }
+
+    /// Increment the hit count
+    pub fn increment_hit(&mut self) {
+        self.hit_count += 1;
+    }
+
+    /// Check if this is a log point (has log message but should not pause)
+    pub fn is_log_point(&self) -> bool {
+        self.log_message.is_some()
+    }
 }
 
-#[derive(Debug, Clone)]
-struct ManagedBreakpoint {
-    spec: BreakpointSpec,
-    hit_count: u64,
-}
-
-/// Manages breakpoints during debugging.
+/// Manages breakpoints during debugging
 pub struct BreakpointManager {
-    breakpoints: HashMap<String, ManagedBreakpoint>,
+    breakpoints: HashMap<String, Breakpoint>,
 }
 
 impl BreakpointManager {
-    /// Create a new breakpoint manager.
+    /// Create a new breakpoint manager
     pub fn new() -> Self {
         Self {
             breakpoints: HashMap::new(),
         }
     }
 
-    /// Add a plain function breakpoint.
-    pub fn add_simple(&mut self, function: &str) {
-        self.add(BreakpointSpec {
-            id: function.to_string(),
-            function: function.to_string(),
-            condition: None,
-            hit_condition: None,
-            log_message: None,
-        });
+    /// Add or update a breakpoint
+    pub fn set(&mut self, breakpoint: Breakpoint) {
+        self.breakpoints.insert(breakpoint.function.clone(), breakpoint);
     }
 
-    /// Add or replace a breakpoint.
-    pub fn add(&mut self, spec: BreakpointSpec) {
-        self.breakpoints.insert(
-            spec.id.clone(),
-            ManagedBreakpoint {
-                spec,
-                hit_count: 0,
-            },
-        );
+    /// Add a simple breakpoint at a function name (backward compatibility)
+    pub fn add(&mut self, function: &str) {
+        self.set(Breakpoint::simple(function.to_string()));
     }
 
-    /// Remove a breakpoint by id.
-    pub fn remove(&mut self, breakpoint_id: &str) -> bool {
-        self.breakpoints.remove(breakpoint_id).is_some()
+    /// Remove a breakpoint
+    pub fn remove(&mut self, function: &str) -> bool {
+        self.breakpoints.remove(function).is_some()
     }
 
-    /// Remove the default plain-function breakpoint used by the TUI/client.
-    pub fn remove_function(&mut self, function: &str) -> bool {
-        self.remove(function)
+    /// Get a breakpoint by function name
+    pub fn get(&self, function: &str) -> Option<&Breakpoint> {
+        self.breakpoints.get(function)
     }
 
-    /// Check if execution should consider a breakpoint at this function.
-    pub fn should_break(&self, function: &str) -> bool {
-        self.breakpoints
-            .values()
-            .any(|breakpoint| breakpoint.spec.function == function)
+    /// Get a mutable breakpoint by function name
+    pub fn get_mut(&mut self, function: &str) -> Option<&mut Breakpoint> {
+        self.breakpoints.get_mut(function)
     }
 
-    /// Evaluate function-entry breakpoints against the current storage and args.
-    pub fn on_hit(
+    /// Check if execution should break at this function
+    /// Returns (should_break, log_output)
+    /// - should_break: whether to pause execution
+    /// - log_output: optional log message to output
+    pub fn should_break_with_context(
         &mut self,
         function: &str,
-        storage: &HashMap<String, String>,
-        args: Option<&str>,
-    ) -> Result<Option<BreakpointHit>> {
-        let mut should_pause = false;
-        let mut matched_ids = Vec::new();
-        let mut log_messages = Vec::new();
+        evaluator: &dyn ConditionEvaluator,
+    ) -> crate::Result<(bool, Option<String>)> {
+        let Some(bp) = self.breakpoints.get_mut(function) else {
+            return Ok((false, None));
+        };
 
-        for breakpoint in self
-            .breakpoints
-            .values_mut()
-            .filter(|breakpoint| breakpoint.spec.function == function)
-        {
-            breakpoint.hit_count = breakpoint.hit_count.saturating_add(1);
+        // Increment hit count
+        bp.increment_hit();
 
-            if !Self::condition_matches(breakpoint.spec.condition.as_ref(), storage, args)? {
-                continue;
+        // Check hit condition first (cheapest check)
+        if let Some(hit_cond) = &bp.hit_condition {
+            if !evaluate_hit_condition(hit_cond, bp.hit_count)? {
+                return Ok((false, None));
             }
-
-            if !Self::hit_condition_matches(
-                breakpoint.spec.hit_condition.as_ref(),
-                breakpoint.hit_count,
-            ) {
-                continue;
-            }
-
-            matched_ids.push(breakpoint.spec.id.clone());
-            if let Some(template) = breakpoint.spec.log_message.as_deref() {
-                log_messages.push(Self::render_log_message(template, function, storage, args));
-                continue;
-            }
-
-            should_pause = true;
         }
 
-        if matched_ids.is_empty() {
-            return Ok(None);
+        // Check expression condition
+        if let Some(condition) = &bp.condition {
+            if !evaluator.evaluate(condition)? {
+                return Ok((false, None));
+            }
         }
 
-        Ok(Some(BreakpointHit {
-            should_pause,
-            matched_ids,
-            log_messages,
-        }))
+        // If it's a log point, generate the log message but don't break
+        if let Some(log_template) = &bp.log_message {
+            let log_output = evaluator.interpolate_log(log_template)?;
+            return Ok((false, Some(log_output)));
+        }
+
+        // Regular breakpoint - should pause
+        Ok((true, None))
     }
 
-    /// List all breakpoint ids.
+    /// Simplified check for backward compatibility
+    pub fn should_break(&self, function: &str) -> bool {
+        self.breakpoints.contains_key(function)
+    }
+
+    /// List all breakpoints
     pub fn list(&self) -> Vec<String> {
         self.breakpoints.keys().cloned().collect()
     }
 
-    /// List structured breakpoint details.
-    pub fn list_detailed(&self) -> Vec<BreakpointSummary> {
-        self.breakpoints
-            .values()
-            .map(|breakpoint| BreakpointSummary {
-                id: breakpoint.spec.id.clone(),
-                function: breakpoint.spec.function.clone(),
-                condition: breakpoint.spec.condition.as_ref().map(Self::format_condition),
-                hit_condition: breakpoint
-                    .spec
-                    .hit_condition
-                    .as_ref()
-                    .map(Self::format_hit_condition),
-                log_message: breakpoint.spec.log_message.clone(),
-            })
-            .collect()
+    /// Get all breakpoints with full details
+    pub fn list_detailed(&self) -> Vec<&Breakpoint> {
+        self.breakpoints.values().collect()
     }
 
-    /// Clear all breakpoints.
+    /// Clear all breakpoints
     pub fn clear(&mut self) {
         self.breakpoints.clear();
     }
 
-    /// Check if there are any breakpoints set.
+    /// Check if there are any breakpoints set
     pub fn is_empty(&self) -> bool {
         self.breakpoints.is_empty()
     }
 
-    /// Get count of breakpoints.
+    /// Get count of breakpoints
     pub fn count(&self) -> usize {
         self.breakpoints.len()
     }
 
-    /// Parse a condition string into a Condition object.
-    pub fn parse_condition(s: &str) -> Result<Condition> {
-        let trimmed = s.trim();
-        let (operator, pos) = find_operator(trimmed).ok_or_else(|| {
-            DebuggerError::BreakpointError(format!(
-                "Unsupported breakpoint condition '{trimmed}'. Expected formats like \
-                 'storage[key] == value' or 'arg_name >= 42'."
-            ))
-        })?;
-
-        let left = trimmed[..pos].trim();
-        let right = trimmed[pos + operator.len()..].trim();
-        if left.is_empty() || right.is_empty() {
-            return Err(DebuggerError::BreakpointError(format!(
-                "Invalid breakpoint condition '{trimmed}'. Both sides of the operator are required."
-            ))
+    /// Parse a condition string into a validated Condition
+    /// This validates syntax but doesn't evaluate it
+    pub fn parse_condition(s: &str) -> crate::Result<String> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Err(crate::DebuggerError::BreakpointError(
+                "Condition cannot be empty".to_string(),
+            )
             .into());
         }
 
-        let operator = parse_operator(operator);
-        if let Some(key) = parse_storage_key(left) {
-            return Ok(Condition::Storage {
-                key,
-                operator,
-                value: strip_wrapping_quotes(right),
-            });
+        // Basic syntax validation - check for supported operators
+        if !contains_comparison_operator(s) {
+            return Err(crate::DebuggerError::BreakpointError(
+                format!("Invalid condition '{}': must contain a comparison operator (==, !=, <, >, <=, >=)", s)
+            ).into());
         }
 
-        if is_identifier(left) {
-            return Ok(Condition::Argument {
-                name: left.to_string(),
-                operator,
-                value: strip_wrapping_quotes(right),
-            });
-        }
-
-        Err(DebuggerError::BreakpointError(format!(
-            "Unsupported breakpoint condition target '{left}' in '{trimmed}'. Use \
-             'storage[key]' or a named argument."
-        ))
-        .into())
+        // Additional validation could be added here
+        Ok(s.to_string())
     }
 
-    /// Parse a DAP hit-count expression.
-    pub fn parse_hit_condition(s: &str) -> Result<HitCondition> {
-        let trimmed = s.trim();
-        if trimmed.is_empty() {
-            return Err(DebuggerError::BreakpointError(
+    /// Parse a hit condition string
+    pub fn parse_hit_condition(s: &str) -> crate::Result<String> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Err(crate::DebuggerError::BreakpointError(
                 "Hit condition cannot be empty".to_string(),
             )
             .into());
         }
 
-        if let Some(rest) = trimmed.strip_prefix('%') {
-            let value = parse_positive_u64(rest.trim(), trimmed)?;
-            return Ok(HitCondition::MultipleOf(value));
+        // Validate hit condition format
+        if !is_valid_hit_condition(s) {
+            return Err(crate::DebuggerError::BreakpointError(
+                format!(
+                    "Invalid hit condition '{}': must be number, >N, >=N, ==N, <N, <=N, or %N==0",
+                    s
+                )
+            )
+            .into());
         }
 
-        for (prefix, builder) in [
-            (">=", HitCondition::Ge as fn(u64) -> HitCondition),
-            ("<=", HitCondition::Le),
-            ("==", HitCondition::Eq),
-            (">", HitCondition::Gt),
-            ("<", HitCondition::Lt),
-            ("=", HitCondition::Eq),
-        ] {
-            if let Some(rest) = trimmed.strip_prefix(prefix) {
-                let value = parse_positive_u64(rest.trim(), trimmed)?;
-                return Ok(builder(value));
+        Ok(s.to_string())
+    }
+}
+
+/// Trait for evaluating conditions against runtime state
+pub trait ConditionEvaluator {
+    /// Evaluate a condition expression (e.g., "balance > 1000")
+    /// Returns true if the condition is met
+    fn evaluate(&self, condition: &str) -> crate::Result<bool>;
+
+    /// Interpolate variables in a log message (e.g., "Balance is {balance}")
+    fn interpolate_log(&self, template: &str) -> crate::Result<String>;
+}
+
+/// Evaluate a hit condition against the current hit count
+fn evaluate_hit_condition(hit_condition: &str, hit_count: usize) -> crate::Result<bool> {
+    let hit_condition = hit_condition.trim();
+
+    // Format: >N, >=N, ==N, <N, <=N, %N==0, or just N (equivalent to >=N)
+    if let Some(stripped) = hit_condition.strip_prefix(">=") {
+        let n: usize = stripped.trim().parse().map_err(|_| {
+            crate::DebuggerError::BreakpointError(format!("Invalid number in hit condition: {}", stripped))
+        })?;
+        return Ok(hit_count >= n);
+    }
+
+    if let Some(stripped) = hit_condition.strip_prefix('>') {
+        let n: usize = stripped.trim().parse().map_err(|_| {
+            crate::DebuggerError::BreakpointError(format!("Invalid number in hit condition: {}", stripped))
+        })?;
+        return Ok(hit_count > n);
+    }
+
+    if let Some(stripped) = hit_condition.strip_prefix("==") {
+        let n: usize = stripped.trim().parse().map_err(|_| {
+            crate::DebuggerError::BreakpointError(format!("Invalid number in hit condition: {}", stripped))
+        })?;
+        return Ok(hit_count == n);
+    }
+
+    if let Some(stripped) = hit_condition.strip_prefix("<=") {
+        let n: usize = stripped.trim().parse().map_err(|_| {
+            crate::DebuggerError::BreakpointError(format!("Invalid number in hit condition: {}", stripped))
+        })?;
+        return Ok(hit_count <= n);
+    }
+
+    if let Some(stripped) = hit_condition.strip_prefix('<') {
+        let n: usize = stripped.trim().parse().map_err(|_| {
+            crate::DebuggerError::BreakpointError(format!("Invalid number in hit condition: {}", stripped))
+        })?;
+        return Ok(hit_count < n);
+    }
+
+    // Modulo format: %N==0 (break every N hits)
+    if hit_condition.contains('%') && hit_condition.contains("==") {
+        let parts: Vec<&str> = hit_condition.split('%').collect();
+        if parts.len() == 2 {
+            let rest: Vec<&str> = parts[1].split("==").collect();
+            if rest.len() == 2 {
+                let n: usize = rest[0].trim().parse().map_err(|_| {
+                    crate::DebuggerError::BreakpointError(format!("Invalid modulo in hit condition: {}", rest[0]))
+                })?;
+                let expected: usize = rest[1].trim().parse().map_err(|_| {
+                    crate::DebuggerError::BreakpointError(format!("Invalid value in hit condition: {}", rest[1]))
+                })?;
+                if n == 0 {
+                    return Err(crate::DebuggerError::BreakpointError(
+                        "Modulo cannot be zero".to_string()
+                    ).into());
+                }
+                return Ok((hit_count % n) == expected);
             }
         }
-
-        Ok(HitCondition::Eq(parse_positive_u64(trimmed, trimmed)?))
     }
 
-    fn condition_matches(
-        condition: Option<&Condition>,
-        storage: &HashMap<String, String>,
-        args: Option<&str>,
-    ) -> Result<bool> {
-        let Some(condition) = condition else {
-            return Ok(true);
-        };
-
-        let (actual, expected, operator) = match condition {
-            Condition::Storage {
-                key,
-                operator,
-                value,
-            } => (storage.get(key).cloned(), Some(value.clone()), operator),
-            Condition::Argument {
-                name,
-                operator,
-                value,
-            } => (
-                extract_argument_value(args, name),
-                Some(value.clone()),
-                operator,
-            ),
-        };
-
-        let Some(actual) = actual else {
-            return Ok(false);
-        };
-        let expected = expected.unwrap_or_default();
-        Ok(compare_values(&actual, &expected, operator))
+    // Plain number means "break when hit count >= N"
+    if let Ok(n) = hit_condition.parse::<usize>() {
+        return Ok(hit_count >= n);
     }
 
-    fn hit_condition_matches(hit_condition: Option<&HitCondition>, hit_count: u64) -> bool {
-        match hit_condition {
-            None => true,
-            Some(HitCondition::Eq(expected)) => hit_count == *expected,
-            Some(HitCondition::Ge(expected)) => hit_count >= *expected,
-            Some(HitCondition::Gt(expected)) => hit_count > *expected,
-            Some(HitCondition::Le(expected)) => hit_count <= *expected,
-            Some(HitCondition::Lt(expected)) => hit_count < *expected,
-            Some(HitCondition::MultipleOf(expected)) => hit_count % *expected == 0,
-        }
-    }
-
-    fn render_log_message(
-        template: &str,
-        function: &str,
-        storage: &HashMap<String, String>,
-        args: Option<&str>,
-    ) -> String {
-        let mut rendered = String::new();
-        let mut remaining = template;
-
-        while let Some(start) = remaining.find('{') {
-            rendered.push_str(&remaining[..start]);
-            let placeholder_start = start + 1;
-            if let Some(end_rel) = remaining[placeholder_start..].find('}') {
-                let end = placeholder_start + end_rel;
-                let expression = remaining[placeholder_start..end].trim();
-                rendered.push_str(
-                    &Self::resolve_log_expression(expression, function, storage, args)
-                        .unwrap_or_else(|| format!("{{{expression}}}")),
-                );
-                remaining = &remaining[end + 1..];
-            } else {
-                rendered.push_str(&remaining[start..]);
-                return rendered;
-            }
-        }
-
-        rendered.push_str(remaining);
-        rendered
-    }
-
-    fn resolve_log_expression(
-        expression: &str,
-        function: &str,
-        storage: &HashMap<String, String>,
-        args: Option<&str>,
-    ) -> Option<String> {
-        if expression.eq_ignore_ascii_case("function") {
-            return Some(function.to_string());
-        }
-        if expression.eq_ignore_ascii_case("args") {
-            return Some(args.unwrap_or_default().to_string());
-        }
-        if let Some(key) = parse_storage_key(expression) {
-            return storage.get(&key).cloned();
-        }
-        extract_argument_value(args, expression)
-    }
-
-    fn format_condition(condition: &Condition) -> String {
-        match condition {
-            Condition::Storage {
-                key,
-                operator,
-                value,
-            } => format!("storage[{key}] {} {value}", format_operator(operator)),
-            Condition::Argument {
-                name,
-                operator,
-                value,
-            } => format!("{name} {} {value}", format_operator(operator)),
-        }
-    }
-
-    fn format_hit_condition(hit_condition: &HitCondition) -> String {
-        match hit_condition {
-            HitCondition::Eq(value) => value.to_string(),
-            HitCondition::Ge(value) => format!(">= {value}"),
-            HitCondition::Gt(value) => format!("> {value}"),
-            HitCondition::Le(value) => format!("<= {value}"),
-            HitCondition::Lt(value) => format!("< {value}"),
-            HitCondition::MultipleOf(value) => format!("% {value}"),
-        }
-    }
+    Err(crate::DebuggerError::BreakpointError(format!(
+        "Invalid hit condition format: {}",
+        hit_condition
+    ))
+    .into())
 }
 
-fn parse_positive_u64(raw: &str, original: &str) -> Result<u64> {
-    let value = raw.parse::<u64>().map_err(|_| {
-        DebuggerError::BreakpointError(format!(
-            "Invalid hit condition '{original}'. Expected a positive integer."
-        ))
-    })?;
-    if value == 0 {
-        return Err(DebuggerError::BreakpointError(format!(
-            "Invalid hit condition '{original}'. Zero is not allowed."
-        ))
-        .into());
-    }
-    Ok(value)
+/// Check if a string contains a comparison operator
+fn contains_comparison_operator(s: &str) -> bool {
+    s.contains(">=") || s.contains("<=") || s.contains("==") || s.contains("!=")
+        || s.contains('>') || s.contains('<')
 }
 
-fn find_operator(s: &str) -> Option<(&'static str, usize)> {
-    let ops = [">=", "<=", "==", "!=", ">", "<"];
-    for op in ops {
-        if let Some(pos) = s.find(op) {
-            return Some((op, pos));
-        }
+/// Validate hit condition format
+fn is_valid_hit_condition(s: &str) -> bool {
+    let s = s.trim();
+    
+    // Check various valid formats
+    if s.starts_with(">=") || s.starts_with('>') 
+        || s.starts_with("==") || s.starts_with("<=") || s.starts_with('<') {
+        return true;
     }
-    None
-}
-
-fn parse_operator(s: &str) -> Operator {
-    match s {
-        "==" => Operator::Eq,
-        "!=" => Operator::Ne,
-        ">" => Operator::Gt,
-        ">=" => Operator::Ge,
-        "<" => Operator::Lt,
-        "<=" => Operator::Le,
-        _ => Operator::Eq,
+    
+    // Check modulo format
+    if s.contains('%') && s.contains("==") {
+        return true;
     }
-}
-
-fn format_operator(operator: &Operator) -> &'static str {
-    match operator {
-        Operator::Eq => "==",
-        Operator::Ne => "!=",
-        Operator::Gt => ">",
-        Operator::Ge => ">=",
-        Operator::Lt => "<",
-        Operator::Le => "<=",
-    }
-}
-
-fn parse_storage_key(input: &str) -> Option<String> {
-    let trimmed = input.trim();
-    if !trimmed.starts_with("storage[") || !trimmed.ends_with(']') {
-        return None;
-    }
-    let inner = &trimmed["storage[".len()..trimmed.len() - 1];
-    let key = strip_wrapping_quotes(inner.trim());
-    if key.is_empty() {
-        None
-    } else {
-        Some(key)
-    }
-}
-
-fn strip_wrapping_quotes(input: &str) -> String {
-    let trimmed = input.trim();
-    if trimmed.len() >= 2 {
-        let starts_with_quote = trimmed.starts_with('"') && trimmed.ends_with('"');
-        let starts_with_single = trimmed.starts_with('\'') && trimmed.ends_with('\'');
-        if starts_with_quote || starts_with_single {
-            return trimmed[1..trimmed.len() - 1].to_string();
-        }
-    }
-    trimmed.to_string()
-}
-
-fn is_identifier(input: &str) -> bool {
-    let mut chars = input.chars();
-    match chars.next() {
-        Some(first) if first == '_' || first.is_ascii_alphabetic() => {}
-        _ => return false,
-    }
-    chars.all(|char| char == '_' || char.is_ascii_alphanumeric())
-}
-
-fn extract_argument_value(args: Option<&str>, name: &str) -> Option<String> {
-    let args = args?;
-    let parsed: Value = serde_json::from_str(args).ok()?;
-
-    match parsed {
-        Value::Object(map) => map.get(name).map(json_value_to_string),
-        Value::Array(items) => items.into_iter().find_map(|item| match item {
-            Value::Object(map) => map.get(name).map(json_value_to_string),
-            _ => None,
-        }),
-        _ => None,
-    }
-}
-
-fn json_value_to_string(value: &Value) -> String {
-    match value {
-        Value::String(value) => value.clone(),
-        other => other.to_string(),
-    }
-}
-
-fn compare_values(actual: &str, expected: &str, operator: &Operator) -> bool {
-    if let (Ok(actual_number), Ok(expected_number)) =
-        (actual.parse::<f64>(), expected.parse::<f64>())
-    {
-        return match operator {
-            Operator::Eq => actual_number == expected_number,
-            Operator::Ne => actual_number != expected_number,
-            Operator::Gt => actual_number > expected_number,
-            Operator::Ge => actual_number >= expected_number,
-            Operator::Lt => actual_number < expected_number,
-            Operator::Le => actual_number <= expected_number,
-        };
-    }
-
-    match operator {
-        Operator::Eq => actual == expected,
-        Operator::Ne => actual != expected,
-        Operator::Gt => actual > expected,
-        Operator::Ge => actual >= expected,
-        Operator::Lt => actual < expected,
-        Operator::Le => actual <= expected,
-    }
+    
+    // Check if it's just a number
+    s.parse::<usize>().is_ok()
 }
 
 impl Default for BreakpointManager {
@@ -539,10 +346,93 @@ impl Default for BreakpointManager {
 mod tests {
     use super::*;
 
+    // Mock evaluator for testing
+    struct MockEvaluator {
+        variables: HashMap<String, i64>,
+    }
+
+    impl MockEvaluator {
+        fn new() -> Self {
+            Self {
+                variables: HashMap::new(),
+            }
+        }
+
+        fn set(&mut self, name: &str, value: i64) {
+            self.variables.insert(name.to_string(), value);
+        }
+    }
+
+    impl ConditionEvaluator for MockEvaluator {
+        fn evaluate(&self, condition: &str) -> crate::Result<bool> {
+            // Simple parser for "variable operator value"
+            let condition = condition.trim();
+            
+            // Find operator
+            let (var, op, value_str) = if let Some(pos) = condition.find(">=") {
+                let (var, rest) = condition.split_at(pos);
+                (var.trim(), ">=", rest[2..].trim())
+            } else if let Some(pos) = condition.find("<=") {
+                let (var, rest) = condition.split_at(pos);
+                (var.trim(), "<=", rest[2..].trim())
+            } else if let Some(pos) = condition.find("==") {
+                let (var, rest) = condition.split_at(pos);
+                (var.trim(), "==", rest[2..].trim())
+            } else if let Some(pos) = condition.find("!=") {
+                let (var, rest) = condition.split_at(pos);
+                (var.trim(), "!=", rest[2..].trim())
+            } else if let Some(pos) = condition.find('>') {
+                let (var, rest) = condition.split_at(pos);
+                (var.trim(), ">", rest[1..].trim())
+            } else if let Some(pos) = condition.find('<') {
+                let (var, rest) = condition.split_at(pos);
+                (var.trim(), "<", rest[1..].trim())
+            } else {
+                return Err(crate::DebuggerError::BreakpointError(
+                    format!("No operator found in condition: {}", condition)
+                ).into());
+            };
+
+            let var_value = self.variables.get(var)
+                .ok_or_else(|| crate::DebuggerError::BreakpointError(
+                    format!("Variable '{}' not found", var)
+                ))?;
+
+            let compare_value: i64 = value_str.parse()
+                .map_err(|_| crate::DebuggerError::BreakpointError(
+                    format!("Invalid number: {}", value_str)
+                ))?;
+
+            let result = match op {
+                ">" => var_value > &compare_value,
+                ">=" => var_value >= &compare_value,
+                "<" => var_value < &compare_value,
+                "<=" => var_value <= &compare_value,
+                "==" => var_value == &compare_value,
+                "!=" => var_value != &compare_value,
+                _ => false,
+            };
+
+            Ok(result)
+        }
+
+        fn interpolate_log(&self, template: &str) -> crate::Result<String> {
+            let mut result = template.to_string();
+            
+            // Replace {variable} with values
+            for (name, value) in &self.variables {
+                let placeholder = format!("{{{}}}", name);
+                result = result.replace(&placeholder, &value.to_string());
+            }
+            
+            Ok(result)
+        }
+    }
+
     #[test]
-    fn test_add_breakpoint() {
+    fn test_simple_breakpoint() {
         let mut manager = BreakpointManager::new();
-        manager.add_simple("transfer");
+        manager.add("transfer");
         assert!(manager.should_break("transfer"));
         assert!(!manager.should_break("mint"));
     }
@@ -550,16 +440,143 @@ mod tests {
     #[test]
     fn test_conditional_breakpoint() {
         let mut manager = BreakpointManager::new();
-        manager.add_simple("transfer");
-        assert!(manager.remove("transfer"));
-        assert!(!manager.should_break("transfer"));
+        let mut evaluator = MockEvaluator::new();
+        evaluator.set("balance", 1500);
+
+        let bp = Breakpoint::with_condition("transfer".to_string(), "balance > 1000".to_string());
+        manager.set(bp);
+
+        let (should_break, log) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(should_break);
+        assert!(log.is_none());
+
+        // Change balance to fail condition
+        evaluator.set("balance", 500);
+        let (should_break, log) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(!should_break);
+        assert!(log.is_none());
+    }
+
+    #[test]
+    fn test_hit_condition_greater_than() {
+        let mut manager = BreakpointManager::new();
+        let evaluator = MockEvaluator::new();
+
+        let bp = Breakpoint::with_hit_condition("transfer".to_string(), ">2".to_string());
+        manager.set(bp);
+
+        // First two hits should not break
+        let (should_break, _) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(!should_break);
+        let (should_break, _) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(!should_break);
+
+        // Third hit should break
+        let (should_break, _) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(should_break);
+    }
+
+    #[test]
+    fn test_hit_condition_equals() {
+        let mut manager = BreakpointManager::new();
+        let evaluator = MockEvaluator::new();
+
+        let bp = Breakpoint::with_hit_condition("transfer".to_string(), "==3".to_string());
+        manager.set(bp);
+
+        // First two hits should not break
+        let (should_break, _) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(!should_break);
+        let (should_break, _) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(!should_break);
+
+        // Third hit should break
+        let (should_break, _) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(should_break);
+
+        // Fourth hit should not break
+        let (should_break, _) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(!should_break);
+    }
+
+    #[test]
+    fn test_hit_condition_modulo() {
+        let mut manager = BreakpointManager::new();
+        let evaluator = MockEvaluator::new();
+
+        // Break every 2 hits
+        let bp = Breakpoint::with_hit_condition("transfer".to_string(), "%2==0".to_string());
+        manager.set(bp);
+
+        let (should_break, _) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(!should_break); // Hit 1: 1 % 2 == 1
+
+        let (should_break, _) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(should_break); // Hit 2: 2 % 2 == 0
+
+        let (should_break, _) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(!should_break); // Hit 3: 3 % 2 == 1
+
+        let (should_break, _) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(should_break); // Hit 4: 4 % 2 == 0
+    }
+
+    #[test]
+    fn test_log_point() {
+        let mut manager = BreakpointManager::new();
+        let mut evaluator = MockEvaluator::new();
+        evaluator.set("balance", 1500);
+        evaluator.set("amount", 100);
+
+        let bp = Breakpoint::log_point(
+            "transfer".to_string(),
+            "Transfer {amount} - Balance: {balance}".to_string()
+        );
+        manager.set(bp);
+
+        let (should_break, log) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(!should_break); // Log points don't break
+        assert_eq!(log, Some("Transfer 100 - Balance: 1500".to_string()));
+    }
+
+    #[test]
+    fn test_combined_conditions() {
+        let mut manager = BreakpointManager::new();
+        let mut evaluator = MockEvaluator::new();
+        evaluator.set("balance", 1500);
+
+        let mut bp = Breakpoint::with_condition("transfer".to_string(), "balance > 1000".to_string());
+        bp.hit_condition = Some(">1".to_string());
+        manager.set(bp);
+
+        // First hit: hit_condition fails (not > 1 yet)
+        let (should_break, _) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(!should_break);
+
+        // Second hit: hit_condition passes, expression condition passes
+        let (should_break, _) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(should_break);
+
+        // Third hit with low balance: hit_condition passes, expression fails
+        evaluator.set("balance", 500);
+        let (should_break, _) = manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert!(!should_break);
     }
 
     #[test]
     fn test_remove_breakpoint() {
         let mut manager = BreakpointManager::new();
-        manager.add_simple("transfer");
-        manager.add_simple("mint");
+        manager.add("transfer");
+        assert!(manager.remove("transfer"));
+        assert!(!manager.should_break("transfer"));
+        assert!(!manager.remove("transfer")); // Second remove returns false
+    }
+
+    #[test]
+    fn test_list_breakpoints() {
+        let mut manager = BreakpointManager::new();
+        manager.add("transfer");
+        manager.add("mint");
         let list = manager.list();
         assert_eq!(list.len(), 2);
         assert!(list.contains(&"transfer".to_string()));
@@ -567,164 +584,46 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_storage_condition() {
-        let cond = BreakpointManager::parse_condition("storage[balance] > 100").unwrap();
-        match cond {
-            Condition::Storage {
-                key,
-                operator,
-                value,
-            } => {
-                assert_eq!(key, "balance");
-                assert_eq!(operator, Operator::Gt);
-                assert_eq!(value, "100");
-            }
-            _ => panic!("Expected storage condition"),
-        }
+    fn test_parse_condition_validation() {
+        // Valid conditions
+        assert!(BreakpointManager::parse_condition("balance > 1000").is_ok());
+        assert!(BreakpointManager::parse_condition("x == 5").is_ok());
+        assert!(BreakpointManager::parse_condition("count >= 10").is_ok());
+
+        // Invalid conditions
+        assert!(BreakpointManager::parse_condition("").is_err());
+        assert!(BreakpointManager::parse_condition("just_a_variable").is_err());
     }
 
     #[test]
-    fn test_parse_argument_condition() {
-        let cond = BreakpointManager::parse_condition("amount >= 500").unwrap();
-        match cond {
-            Condition::Argument {
-                name,
-                operator,
-                value,
-            } => {
-                assert_eq!(name, "amount");
-                assert_eq!(operator, Operator::Ge);
-                assert_eq!(value, "500");
-            }
-            _ => panic!("Expected argument condition"),
-        }
+    fn test_parse_hit_condition_validation() {
+        // Valid hit conditions
+        assert!(BreakpointManager::parse_hit_condition(">5").is_ok());
+        assert!(BreakpointManager::parse_hit_condition(">=10").is_ok());
+        assert!(BreakpointManager::parse_hit_condition("==3").is_ok());
+        assert!(BreakpointManager::parse_hit_condition("%2==0").is_ok());
+        assert!(BreakpointManager::parse_hit_condition("5").is_ok());
+
+        // Invalid hit conditions
+        assert!(BreakpointManager::parse_hit_condition("").is_err());
+        assert!(BreakpointManager::parse_hit_condition("invalid").is_err());
     }
 
     #[test]
-    fn test_parse_hit_condition_variants() {
-        assert_eq!(
-            BreakpointManager::parse_hit_condition("5").unwrap(),
-            HitCondition::Eq(5)
-        );
-        assert_eq!(
-            BreakpointManager::parse_hit_condition(">= 3").unwrap(),
-            HitCondition::Ge(3)
-        );
-        assert_eq!(
-            BreakpointManager::parse_hit_condition("% 2").unwrap(),
-            HitCondition::MultipleOf(2)
-        );
-    }
-
-    #[test]
-    fn test_evaluate_storage_condition() {
+    fn test_hit_count_increments() {
         let mut manager = BreakpointManager::new();
-        let cond = BreakpointManager::parse_condition("storage[user1] == Bob").unwrap();
-        manager.add(BreakpointSpec {
-            id: "bp-1".to_string(),
-            function: "test_func".to_string(),
-            condition: Some(cond),
-            hit_condition: None,
-            log_message: None,
-        });
-
-        let mut storage = HashMap::new();
-        storage.insert("user1".to_string(), "Bob".to_string());
-
-        let hit = manager.on_hit("test_func", &storage, None).unwrap().unwrap();
-        assert!(hit.should_pause);
-
-        storage.insert("user1".to_string(), "Alice".to_string());
-        assert!(manager.on_hit("test_func", &storage, None).unwrap().is_none());
-    }
-
-    #[test]
-    fn test_evaluate_numeric_condition() {
-        let mut manager = BreakpointManager::new();
-        let cond = BreakpointManager::parse_condition("amount > 1000").unwrap();
-        manager.add(BreakpointSpec {
-            id: "bp-2".to_string(),
-            function: "test_func".to_string(),
-            condition: Some(cond),
-            hit_condition: None,
-            log_message: None,
-        });
-
-        let storage = HashMap::new();
-
-        assert!(manager
-            .on_hit("test_func", &storage, Some("{\"amount\": 1500}"))
-            .unwrap()
-            .unwrap()
-            .should_pause);
-        assert!(manager
-            .on_hit("test_func", &storage, Some("{\"amount\": 500}"))
-            .unwrap()
-            .is_none());
-        assert!(manager
-            .on_hit("test_func", &storage, Some("{\"amount\": 1000}"))
-            .unwrap()
-            .is_none());
-    }
-
-    #[test]
-    fn test_hit_condition_delays_pause() {
-        let mut manager = BreakpointManager::new();
-        manager.add(BreakpointSpec {
-            id: "bp-3".to_string(),
-            function: "test_func".to_string(),
-            condition: None,
-            hit_condition: Some(HitCondition::Ge(3)),
-            log_message: None,
-        });
-
-        let storage = HashMap::new();
-        assert!(manager.on_hit("test_func", &storage, None).unwrap().is_none());
-        assert!(manager.on_hit("test_func", &storage, None).unwrap().is_none());
-        assert!(manager
-            .on_hit("test_func", &storage, None)
-            .unwrap()
-            .unwrap()
-            .should_pause);
-    }
-
-    #[test]
-    fn test_logpoint_renders_values_without_pausing() {
-        let mut manager = BreakpointManager::new();
-        manager.add(BreakpointSpec {
-            id: "bp-4".to_string(),
-            function: "transfer".to_string(),
-            condition: None,
-            hit_condition: None,
-            log_message: Some(
-                "transfer amount={amount} balance={storage[balance]} fn={function}".to_string(),
-            ),
-        });
-
-        let mut storage = HashMap::new();
-        storage.insert("balance".to_string(), "42".to_string());
-
-        let hit = manager
-            .on_hit("transfer", &storage, Some("{\"amount\": 9}"))
-            .unwrap()
-            .unwrap();
-
-        assert!(!hit.should_pause);
-        assert_eq!(
-            hit.log_messages,
-            vec!["transfer amount=9 balance=42 fn=transfer".to_string()]
-        );
-    }
-
-    #[test]
-    fn test_invalid_condition_syntax_reports_helpful_message() {
-        let err = BreakpointManager::parse_condition("amount").unwrap_err();
-        assert!(err.to_string().contains("Unsupported breakpoint condition"));
-    }
-
-    #[test]
-    fn test_invalid_hit_condition_reports_helpful_message() {
-        let err = BreakpointManager::parse_hit_condition("% 0").unwrap_err();
-        assert!(err.to_string().contains("Zero is not allowed"));
+        manager.add("transfer");
+        
+        let evaluator = MockEvaluator::new();
+        
+        // Check hit count increments
+        manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert_eq!(manager.get("transfer").unwrap().hit_count, 1);
+        
+        manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert_eq!(manager.get("transfer").unwrap().hit_count, 2);
+        
+        manager.should_break_with_context("transfer", &evaluator).unwrap();
+        assert_eq!(manager.get("transfer").unwrap().hit_count, 3);
     }
 }
