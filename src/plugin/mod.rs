@@ -16,4 +16,4 @@ pub use loader::{
     LoadedPlugin, PluginLoader, PluginTrustAssessment, PluginTrustMode, PluginTrustPolicy,
 };
 pub use manifest::{PluginCapabilities, PluginManifest, PluginSignature, VerifiedPluginSignature};
-pub use registry::{PluginRegistry, PluginStatistics};
+pub use registry::{PluginReloadDiff, PluginRegistry, PluginStatistics};

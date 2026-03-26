@@ -14,7 +14,7 @@ use std::fs;
 use std::io::BufReader as StdBufReader;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::AsyncBufReadExt;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig};
@@ -117,7 +117,7 @@ impl DebugServer {
     {
         let mut authenticated = self.token.is_none();
         let mut handshake_done = false;
-        let (reader, mut writer) = tokio::io::split(stream);
+        let (reader, writer) = tokio::io::split(stream);
         let mut reader = tokio::io::BufReader::new(reader);
 
         let (tx_in, mut rx_in) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -163,7 +163,7 @@ impl DebugServer {
         });
 
         // Helper closure to abstract away tx_out
-        let mut send_msg = |msg: DebugMessage| -> Result<()> {
+        let send_msg = |msg: DebugMessage| -> Result<()> {
             tx_out.send(msg).map_err(|_| miette::miette!("Connection closed"))
         };
 

@@ -328,7 +328,7 @@ impl CompareEngine {
         out.push_str("═══════════════════════════════════════════════════════════════\n\n");
 
         // ── First Divergence Context ───────────────────────────────
-        Self::render_first_divergence(&report, &mut out);
+        Self::render_first_divergence(report, &mut out);
         out.push('\n');
 
         // ── Storage ────────────────────────────────────────────────
@@ -561,8 +561,7 @@ impl CompareEngine {
             out.push_str("    ...\n");
         }
 
-        for i in start..end {
-            let line = &lines[i];
+        for (i, line) in lines.iter().enumerate().take(end).skip(start) {
             let marker = if i == idx { ">" } else { " " };
             match line {
                 DiffLine::Same(s) => out.push_str(&format!("  {}   {}\n", marker, s)),

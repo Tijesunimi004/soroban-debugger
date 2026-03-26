@@ -502,7 +502,39 @@ On startup, the debugger:
 
 ## Hot-Reload Support
 
-Plugins that support hot-reload can be updated without restarting the debugger.
+Plugins that support hot-reload can be updated without restarting the debugger. When a plugin is reloaded, the debugger automatically detects and reports all changes, making it easy to verify that your updates were loaded correctly.
+
+### Change Detection
+
+The hot-reload system tracks and reports:
+
+- **Version changes**: Old version → New version
+- **Capability changes**: Which capabilities were enabled or disabled
+- **Command changes**: Commands added or removed
+- **Formatter changes**: Formatters added or removed
+- **Dependency changes**: Dependencies added or removed
+
+Example reload output:
+```
+Plugin 'example-logger' reload changes:
+  Version: 1.0.0 → 1.1.0
+  Capabilities:
+    provides_commands: false → true
+  Commands added: log-stats, clear-log
+  Formatters added: json-formatter
+  Dependencies added: helper-plugin
+```
+
+If no changes are detected, you'll see:
+```
+Plugin 'example-logger' reloaded with no changes
+```
+
+This immediate feedback helps during iterative plugin development, allowing you to:
+- Verify that code changes were compiled and loaded
+- Confirm that new features are properly exposed
+- Catch unintended changes or regressions
+- Trust that the reload succeeded as expected
 
 ### Implementing Hot-Reload
 

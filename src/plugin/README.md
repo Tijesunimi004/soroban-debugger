@@ -95,6 +95,28 @@ Plugins can:
 - ✅ **Support hot-reload** - Update plugins without restarting the debugger
 - ✅ **Depend on other plugins** - Build on existing plugin functionality
 
+### Hot-Reload with Change Detection
+
+When a plugin is hot-reloaded, the debugger automatically detects and reports changes:
+
+- Version updates
+- Capability changes (hooks, commands, formatters, hot-reload support)
+- Added or removed commands
+- Added or removed formatters
+- Dependency changes
+
+This makes it easy to verify that your plugin changes were loaded correctly during iterative development.
+
+Example reload output:
+```
+Plugin 'example-logger' reload changes:
+  Version: 1.0.0 → 1.1.0
+  Capabilities:
+    provides_commands: false → true
+  Commands added: new-command
+  Formatters added: json-formatter
+```
+
 ## Execution Events
 
 Plugins can hook into these events:

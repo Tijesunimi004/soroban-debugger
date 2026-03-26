@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use assert_cmd::cargo::CommandCargoExt;
+use assert_cmd::Command;
 use predicates::prelude::*;
 use std::path::PathBuf;
 use std::process::Command as StdCommand;
@@ -95,6 +96,7 @@ fn test_remote_run_execution() {
 
     // Kill server
     server_child.kill().unwrap();
+    let _ = server_child.wait();
 
     // The counter.wasm might just output 1 on first increment
     // Let's just assert that it executed successfully rather than checking the exact value if we are unsure

@@ -301,14 +301,13 @@ fn main() -> miette::Result<()> {
 
     if let Err(err) = result {
         if run_json_output_requested {
-            let hints = err.help().map(|h| vec![h.to_string()]);
-            let output = soroban_debugger::cli::output::CommandOutput::<()> {
-                status: "error".to_string(),
-                result: None,
-                budget: None,
-                errors: Some(vec![err.to_string()]),
-                hints,
-            };
+            let mut message = err.to_string();
+            if let Some(help) = err.help() {
+                message.push_str(&format!(" | hint: {}", help));
+            }
+            let output = soroban_debugger::output::VersionedOutput::<serde_json::Value>::error(
+                "run", message,
+            );
             if let Ok(json) = serde_json::to_string_pretty(&output) {
                 println!("{}", json);
             }
