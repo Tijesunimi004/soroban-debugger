@@ -160,6 +160,8 @@ jobs:
       - name: Remove main branch worktree
         if: always()
         run: git worktree remove --force /tmp/bench-base || true
+      - name: Record current results (JSON)
+        run: cargo run --quiet --bin bench-regression -- record --criterion target/criterion --out .bench/current.json
 
       - name: Compare against baseline (pass/warn/fail)
         if: github.event_name == 'pull_request'
