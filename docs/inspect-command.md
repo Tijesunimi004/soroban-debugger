@@ -1,6 +1,6 @@
 # Inspect Command - Analyzing Soroban Contracts
 
-## Debugger Paused Location Output
+## Debugger Paused Location Outputs
 
 When using the interactive CLI or TUI debugger, if source mapping information is available, the exact paused file and line number will be displayed whenever execution is paused. This helps you quickly locate the corresponding source code during debugging.
 
