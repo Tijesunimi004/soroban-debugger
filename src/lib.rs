@@ -78,13 +78,12 @@ pub enum DebuggerError {
     )]
     StorageError(String),
 
-    #[error("WASM checksum mismatch.\n  Expected : {expected}\n  Computed : {actual}")]
+    #[error("WASM checksum mismatch.\n  Expected : {0}\n  Computed : {1}")]
     #[diagnostic(
         code(debugger::checksum_mismatch),
         help("Action: If you recompiled the contract, supply its new hash or run without the hash verification flag.\nContext: The provided file hash does not match expected remote or snapshot hash.")
     )]
-    #[allow(unused_assignments)] // False positive from derive macro expansion for named fields.
-    ChecksumMismatch { expected: String, actual: String },
+    ChecksumMismatch(String, String),
 
     #[error("File operation failed: {0}")]
     #[diagnostic(
@@ -100,13 +99,12 @@ pub enum DebuggerError {
     )]
     NetworkError(String),
 
-    #[error("Request timed out: {operation} (timeout={timeout_ms}ms)")]
+    #[error("Request timed out: {0} (timeout={1}ms)")]
     #[diagnostic(
         code(debugger::request_timeout),
         help("Action: Increase the timeout/retry settings if your host environment is slow or congested.\nContext: Network instability or an overloaded host aborted the request.")
     )]
-    #[allow(unused_assignments)] // False positive from derive macro expansion for named fields.
-    RequestTimeout { operation: String, timeout_ms: u64 },
+    RequestTimeout(String, u64),
 
     #[error("Authentication failed: {0}")]
     #[diagnostic(

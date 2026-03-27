@@ -705,10 +705,7 @@ pub fn load_wasm<P: AsRef<Path>>(path: P) -> Result<WasmFile> {
 pub fn verify_wasm_hash(computed_hash: &str, expected_hash: Option<&String>) -> Result<()> {
     if let Some(expected) = expected_hash {
         if expected.to_lowercase() != computed_hash {
-            return Err(crate::DebuggerError::ChecksumMismatch {
-                expected: expected.clone(),
-                actual: computed_hash.to_string(),
-            }
+            return Err(crate::DebuggerError::ChecksumMismatch(expected.clone(), computed_hash.to_string())
             .into());
         }
     }
@@ -1144,10 +1141,7 @@ mod tests {
         let err = result.unwrap_err();
         // Downcast back to DebuggerError to check the variant
         match err.downcast_ref::<crate::DebuggerError>() {
-            Some(crate::DebuggerError::ChecksumMismatch {
-                expected: e,
-                actual: a,
-            }) => {
+            Some(crate::DebuggerError::ChecksumMismatch(e, a)) => {
                 assert_eq!(e, "wronghash999");
                 assert_eq!(a, "abcdef123456");
             }

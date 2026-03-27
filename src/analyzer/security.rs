@@ -1484,10 +1484,6 @@ fn analyze_reentrancy_pattern_dynamic(trace: &[DynamicTraceEvent]) -> Vec<Securi
     findings
 }
 
-fn analyze_reentrancy_dynamic(trace: &[DynamicTraceEvent]) -> Vec<SecurityFinding> {
-    analyze_reentrancy_pattern_dynamic(trace)
-}
-
 fn frame_key_for(entry: &DynamicTraceEvent) -> Option<FrameKey> {
     if entry.function.is_none() {
         return None;

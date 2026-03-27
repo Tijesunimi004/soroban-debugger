@@ -17,10 +17,7 @@ pub fn run(args: &InspectArgs) -> Result<()> {
 
     if let Some(expected) = &args.expected_hash {
         if expected.to_lowercase() != wasm_hash {
-            return Err(crate::DebuggerError::ChecksumMismatch {
-                expected: expected.clone(),
-                actual: wasm_hash.clone(),
-            }
+            return Err(crate::DebuggerError::ChecksumMismatch(expected.clone(), wasm_hash.clone())
             .into());
         }
     }

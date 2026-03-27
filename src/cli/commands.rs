@@ -509,10 +509,7 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
 
     if let Some(expected) = &args.expected_hash {
         if expected.to_lowercase() != wasm_hash {
-            return Err((crate::DebuggerError::ChecksumMismatch {
-                expected: expected.clone(),
-                actual: wasm_hash.clone(),
-            })
+            return Err((crate::DebuggerError::ChecksumMismatch(expected.clone(), wasm_hash.clone()))
             .into());
         }
     }
@@ -1026,10 +1023,7 @@ fn run_dry_run(args: &RunArgs) -> Result<()> {
 
     if let Some(expected) = &args.expected_hash {
         if expected.to_lowercase() != wasm_hash {
-            return Err((crate::DebuggerError::ChecksumMismatch {
-                expected: expected.clone(),
-                actual: wasm_hash.clone(),
-            })
+            return Err((crate::DebuggerError::ChecksumMismatch(expected.clone(), wasm_hash.clone()))
             .into());
         }
     }
@@ -1362,10 +1356,7 @@ pub fn optimize(args: OptimizeArgs, _verbosity: Verbosity) -> Result<()> {
 
     if let Some(expected) = &args.expected_hash {
         if expected.to_lowercase() != wasm_hash {
-            return Err((crate::DebuggerError::ChecksumMismatch {
-                expected: expected.clone(),
-                actual: wasm_hash.clone(),
-            })
+            return Err((crate::DebuggerError::ChecksumMismatch(expected.clone(), wasm_hash.clone()))
             .into());
         }
     }
@@ -1477,10 +1468,7 @@ pub fn profile(args: ProfileArgs) -> Result<()> {
 
     if let Some(expected) = &args.expected_hash {
         if expected.to_lowercase() != wasm_hash {
-            return Err((crate::DebuggerError::ChecksumMismatch {
-                expected: expected.clone(),
-                actual: wasm_hash.clone(),
-            })
+            return Err((crate::DebuggerError::ChecksumMismatch(expected.clone(), wasm_hash.clone()))
             .into());
         }
     }
@@ -1791,10 +1779,7 @@ pub fn interactive(args: InteractiveArgs, _verbosity: Verbosity) -> Result<()> {
 
     if let Some(expected) = &args.expected_hash {
         if expected.to_lowercase() != wasm_hash {
-            return Err((crate::DebuggerError::ChecksumMismatch {
-                expected: expected.clone(),
-                actual: wasm_hash.clone(),
-            })
+            return Err((crate::DebuggerError::ChecksumMismatch(expected.clone(), wasm_hash.clone()))
             .into());
         }
     }
@@ -1911,10 +1896,7 @@ pub fn inspect(args: InspectArgs, _verbosity: Verbosity) -> Result<()> {
         .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
     if let Some(expected) = &args.expected_hash {
         if !wasm_file.sha256_hash.eq_ignore_ascii_case(expected) {
-            return Err(DebuggerError::ChecksumMismatch {
-                expected: expected.clone(),
-                actual: wasm_file.sha256_hash.clone(),
-            }
+            return Err(crate::DebuggerError::ChecksumMismatch(expected.clone(), wasm_file.sha256_hash.clone())
             .into());
         }
     }
