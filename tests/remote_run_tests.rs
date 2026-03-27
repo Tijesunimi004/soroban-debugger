@@ -1,4 +1,3 @@
-use assert_cmd::cargo::CommandCargoExt;
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::path::PathBuf;
@@ -47,7 +46,7 @@ fn test_remote_run_execution() {
     }
 
     // Start server in background
-    let mut server_cmd = StdCommand::cargo_bin("soroban-debug").unwrap();
+    let mut server_cmd = StdCommand::new(assert_cmd::cargo::cargo_bin!("soroban-debug"));
 
     let mut server_child = server_cmd
         .arg("server")
@@ -62,7 +61,7 @@ fn test_remote_run_execution() {
     std::thread::sleep(Duration::from_millis(1500));
 
     // Smoke-test ping through the `run --remote` path:
-    let mut ping_cmd = Command::cargo_bin("soroban-debug").unwrap();
+    let mut ping_cmd: Command = assert_cmd::cargo::cargo_bin_cmd!("soroban-debug");
     ping_cmd
         .arg("run")
         .arg("--remote")
@@ -76,7 +75,7 @@ fn test_remote_run_execution() {
     let counter_wasm = ensure_counter_wasm();
 
     // Run remote client
-    let mut client_cmd = Command::cargo_bin("soroban-debug").unwrap();
+    let mut client_cmd: Command = assert_cmd::cargo::cargo_bin_cmd!("soroban-debug");
     let assert = client_cmd
         .arg("run")
         .arg("--remote")
