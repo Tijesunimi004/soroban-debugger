@@ -1,0 +1,27 @@
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        description: Format files with rustfmt.
+        entry: cargo fmt
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy strict
+        description: Lint Rust sources with CI-equivalent strict settings.
+        entry: cargo clippy
+        language: system
+        args: ["--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"]
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-test
+        name: cargo test
+        description: Run tests.
+        entry: cargo test
+        language: system
+        types: [rust]
+        pass_filenames: false

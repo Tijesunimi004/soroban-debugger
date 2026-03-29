@@ -95,6 +95,28 @@ Plugins can:
 - ✅ **Support hot-reload** - Update plugins without restarting the debugger
 - ✅ **Depend on other plugins** - Build on existing plugin functionality
 
+### Hot-Reload with Change Detection
+
+When a plugin is hot-reloaded, the debugger automatically detects and reports changes:
+
+- Version updates
+- Capability changes (hooks, commands, formatters, hot-reload support)
+- Added or removed commands
+- Added or removed formatters
+- Dependency changes
+
+This makes it easy to verify that your plugin changes were loaded correctly during iterative development.
+
+Example reload output:
+```
+Plugin 'example-logger' reload changes:
+  Version: 1.0.0 → 1.1.0
+  Capabilities:
+    provides_commands: false → true
+  Commands added: new-command
+  Formatters added: json-formatter
+```
+
 ## Execution Events
 
 Plugins can hook into these events:
@@ -130,6 +152,23 @@ The plugin system uses dynamic library loading (`libloading` crate) to load plug
 4. Receives events through the `on_event` callback
 
 The `PluginRegistry` manages all loaded plugins and dispatches events to them.
+
+## Plugin Commands and Formatters
+
+Plugins can provide custom CLI commands via [`InspectorPlugin::commands`]. These are routed at runtime
+using clap's external subcommand support, so a plugin command named `my-command` can be invoked as:
+
+```bash
+soroban-debug my-command arg1 arg2
+```
+
+Plugins can also provide output formatters via [`InspectorPlugin::formatters`]. If no plugin command matches
+an external subcommand, the debugger will attempt to treat it as a formatter name and pass the remaining
+arguments as the input payload:
+
+```bash
+soroban-debug my-formatter '{\"some\":\"json\"}'
+```
 
 ## Security Considerations
 

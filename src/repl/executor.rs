@@ -14,7 +14,7 @@ use std::fs;
 
 /// Executor for REPL commands
 pub struct ReplExecutor {
-    executor: ContractExecutor,
+    engine: crate::debugger::engine::DebuggerEngine,
     signatures: HashMap<String, ContractFunctionSignature>,
     address_aliases: HashMap<String, String>,
 }
@@ -32,17 +32,28 @@ impl ReplExecutor {
             .into_iter()
             .map(|sig| (sig.name.clone(), sig))
             .collect();
-        let mut executor = ContractExecutor::new(wasm_bytes)?;
-        executor.enable_mock_all_auths();
+        let executor = ContractExecutor::new(wasm_bytes)?;
+        let mut engine = crate::debugger::engine::DebuggerEngine::new(executor, Vec::new());
+        engine.executor_mut().enable_mock_all_auths();
+
+        if let Some(snapshot_path) = &config.network_snapshot {
+            let loader =
+                crate::simulator::SnapshotLoader::from_file(snapshot_path).map_err(|e| {
+                    miette::miette!("Failed to load network snapshot {:?}: {}", snapshot_path, e)
+                })?;
+            let loaded = loader.apply_to_environment()?;
+            engine.executor_mut().apply_snapshot_ledger(&loaded)?;
+            crate::logging::log_display(loaded.format_summary(), crate::logging::LogLevel::Info);
+        }
 
         if let Some(storage_json) = &config.storage {
-            // Best-effort for parity with the rest of the CLI. The underlying
-            // executor currently treats this as a no-op placeholder.
-            executor.set_initial_storage(storage_json.clone())?;
+            engine
+                .executor_mut()
+                .set_initial_storage(storage_json.clone())?;
         }
 
         Ok(ReplExecutor {
-            executor,
+            engine,
             signatures,
             address_aliases: HashMap::new(),
         })
@@ -57,9 +68,19 @@ impl ReplExecutor {
             Some(args_json.as_str())
         };
 
-        let storage_before = self.executor.get_storage_snapshot()?;
-        let result = self.executor.execute(function, args_ref)?;
-        let storage_after = self.executor.get_storage_snapshot()?;
+        // Check if we should break before starting
+        if self.engine.breakpoints().should_break(function) {
+            self.engine.prepare_breakpoint_stop(function, args_ref);
+            crate::logging::log_display(
+                format!("Execution paused at function: {}", function),
+                crate::logging::LogLevel::Warn,
+            );
+            return Ok(());
+        }
+
+        let storage_before = self.engine.executor().get_storage_snapshot()?;
+        let result = self.engine.execute(function, args_ref)?;
+        let storage_after = self.engine.executor().get_storage_snapshot()?;
 
         crate::logging::log_display(
             format!("Result: {}", result),
@@ -74,6 +95,13 @@ impl ReplExecutor {
         }
 
         Ok(())
+    }
+
+    /// Return known exported function names for REPL completion.
+    pub fn function_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.signatures.keys().cloned().collect();
+        names.sort();
+        names
     }
 
     fn args_to_json_array_for(&mut self, function: &str, args: &[String]) -> Result<String> {
@@ -120,7 +148,7 @@ impl ReplExecutor {
             raw.to_string()
         } else {
             if !self.address_aliases.contains_key(raw) {
-                let generated = self.executor.generate_repl_account_strkey()?;
+                let generated = self.engine.executor_mut().generate_repl_account_strkey()?;
                 crate::logging::log_display(
                     format!("Address alias '{}' -> {}", raw, generated),
                     crate::logging::LogLevel::Info,
@@ -141,7 +169,7 @@ impl ReplExecutor {
 
     /// Inspect and display contract storage
     pub fn inspect_storage(&self) -> Result<()> {
-        let entries = self.executor.get_storage_snapshot()?;
+        let entries = self.engine.executor().get_storage_snapshot()?;
 
         if entries.is_empty() {
             crate::logging::log_display("Storage is empty", crate::logging::LogLevel::Warn);
@@ -158,6 +186,59 @@ impl ReplExecutor {
         for (key, value) in items {
             crate::logging::log_display(
                 format!("  {}: {}", key, value),
+                crate::logging::LogLevel::Info,
+            );
+        }
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
+
+        Ok(())
+    }
+    pub fn add_breakpoint(&mut self, function: &str, condition: Option<&str>) -> Result<()> {
+        if let Some(condition) = condition {
+            self.engine.breakpoints_mut().set(
+                crate::debugger::breakpoint::Breakpoint::with_condition(
+                    function.to_string(),
+                    condition.to_string(),
+                ),
+            );
+        } else {
+            self.engine.breakpoints_mut().add(function);
+        }
+        Ok(())
+    }
+
+    pub fn list_breakpoints(&self) -> Vec<crate::debugger::breakpoint::Breakpoint> {
+        self.engine
+            .breakpoints()
+            .list_detailed()
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    pub fn remove_breakpoint(&mut self, function: &str) -> bool {
+        self.engine.breakpoints_mut().remove(function)
+    }
+
+    pub fn display_functions(&self) -> Result<()> {
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
+        crate::logging::log_display("=== Contract Functions ===", crate::logging::LogLevel::Info);
+        let id = self.engine.executor().contract_address();
+        crate::logging::log_display(format!("Address: {:?}", id), crate::logging::LogLevel::Info);
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
+
+        let mut sigs: Vec<_> = self.signatures.values().collect::<Vec<_>>();
+        sigs.sort_by_key(|s| s.name.clone());
+
+        for sig in sigs {
+            let params: Vec<String> = sig
+                .params
+                .iter()
+                .map(|p| format!("{}: {}", p.name, p.type_name))
+                .collect();
+            let ret = sig.return_type.as_deref().unwrap_or("()");
+            crate::logging::log_display(
+                format!("  {}({}) -> {}", sig.name, params.join(", "), ret),
                 crate::logging::LogLevel::Info,
             );
         }

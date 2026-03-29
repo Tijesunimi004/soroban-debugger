@@ -153,6 +153,15 @@ impl StorageInspector {
         }
     }
 
+    /// Create a StorageInspector from an existing storage snapshot
+    pub fn with_state(storage: HashMap<String, String>) -> Self {
+        Self {
+            storage,
+            reads: HashMap::new(),
+            writes: HashMap::new(),
+        }
+    }
+
     /// Get all storage entries
     pub fn get_all(&self) -> &HashMap<String, String> {
         &self.storage
@@ -349,6 +358,20 @@ impl StorageInspector {
             );
         }
         crate::logging::log_display("", crate::logging::LogLevel::Info);
+    }
+
+    /// Sync access tracking from DebugEnv
+    pub fn sync_from_debug_env(&mut self, debug_env: &crate::runtime::env::DebugEnv) {
+        for access in debug_env.storage_accesses() {
+            match &access.access_type {
+                crate::runtime::env::StorageAccessType::Read => {
+                    self.track_read(&access.key);
+                }
+                crate::runtime::env::StorageAccessType::Write => {
+                    self.track_write(&access.key);
+                }
+            }
+        }
     }
 
     /// Capture a snapshot of all storage entries from the host

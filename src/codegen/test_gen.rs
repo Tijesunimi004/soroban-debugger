@@ -132,6 +132,12 @@ mod tests {
             function: "add".to_string(),
             args: vec![ScVal::U32(10), ScVal::U32(20)],
             result: Ok(ScVal::U32(30)),
+            budget: crate::inspector::budget::BudgetInfo {
+                cpu_instructions: 0,
+                cpu_limit: 0,
+                memory_bytes: 0,
+                memory_limit: 0,
+            },
             storage_before: HashMap::new(),
             storage_after: HashMap::new(),
         };

@@ -7,17 +7,110 @@ use super::executor::ReplExecutor;
 use super::ReplConfig;
 use crate::ui::formatter::Formatter;
 use crate::Result;
+use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
+use rustyline::highlight::Highlighter;
+use rustyline::hint::Hinter;
 use rustyline::history::FileHistory;
-use rustyline::{DefaultEditor, Editor};
+use rustyline::validate::{ValidationContext, ValidationResult, Validator};
+use rustyline::{Context, Editor, Helper};
 use std::path::PathBuf;
 
 /// REPL session state and editor
 pub struct ReplSession {
-    editor: Editor<(), FileHistory>,
+    editor: Editor<ReplHelper, FileHistory>,
     config: ReplConfig,
     executor: ReplExecutor,
     history_path: PathBuf,
+}
+
+#[derive(Clone)]
+struct ReplHelper {
+    commands: Vec<String>,
+    functions: Vec<String>,
+}
+
+impl ReplHelper {
+    fn new(commands: Vec<String>, functions: Vec<String>) -> Self {
+        Self {
+            commands,
+            functions,
+        }
+    }
+
+    fn complete_from(candidates: &[String], prefix: &str) -> Vec<Pair> {
+        candidates
+            .iter()
+            .filter(|candidate| candidate.starts_with(prefix))
+            .map(|candidate| Pair {
+                display: candidate.clone(),
+                replacement: candidate.clone(),
+            })
+            .collect()
+    }
+
+    fn complete_for_input(&self, line: &str, pos: usize) -> (usize, Vec<Pair>) {
+        let input = &line[..pos];
+        let tokens: Vec<&str> = input.split_whitespace().collect();
+
+        // Complete top-level command name.
+        if tokens.is_empty() || (tokens.len() == 1 && !input.ends_with(' ')) {
+            let (start, prefix) = match tokens.first() {
+                Some(prefix) => (pos.saturating_sub(prefix.len()), *prefix),
+                None => (pos, ""),
+            };
+            let matches = Self::complete_from(&self.commands, prefix);
+            return (start, matches);
+        }
+
+        // Complete function name after `call`.
+        if tokens.first() == Some(&"call") {
+            if input.ends_with(' ') {
+                if tokens.len() == 1 {
+                    let start = pos;
+                    let matches = Self::complete_from(&self.functions, "");
+                    return (start, matches);
+                }
+                return (pos, Vec::new());
+            }
+
+            if tokens.len() == 2 {
+                let prefix = tokens[1];
+                let start = pos.saturating_sub(prefix.len());
+                let matches = Self::complete_from(&self.functions, prefix);
+                return (start, matches);
+            }
+        }
+
+        (pos, Vec::new())
+    }
+}
+
+impl Helper for ReplHelper {}
+
+impl Hinter for ReplHelper {
+    type Hint = String;
+}
+
+impl Highlighter for ReplHelper {}
+
+impl Validator for ReplHelper {
+    fn validate(&self, _ctx: &mut ValidationContext<'_>) -> rustyline::Result<ValidationResult> {
+        Ok(ValidationResult::Valid(None))
+    }
+}
+
+impl Completer for ReplHelper {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
+        Ok(self.complete_for_input(line, pos))
+    }
 }
 
 impl ReplSession {
@@ -27,13 +120,21 @@ impl ReplSession {
             .unwrap_or_else(std::env::temp_dir)
             .join(".soroban_repl_history");
 
-        let mut editor = DefaultEditor::new()
+        let executor = ReplExecutor::new(&config)?;
+        let helper = ReplHelper::new(
+            ReplCommand::builtins()
+                .iter()
+                .map(|cmd| (*cmd).to_string())
+                .collect(),
+            executor.function_names(),
+        );
+
+        let mut editor = Editor::<ReplHelper, FileHistory>::new()
             .map_err(|e| miette::miette!("Failed to initialize REPL editor: {}", e))?;
+        editor.set_helper(Some(helper));
 
         // Load history if it exists
         let _ = editor.load_history(&history_path);
-
-        let executor = ReplExecutor::new(&config)?;
 
         Ok(ReplSession {
             editor,
@@ -126,6 +227,52 @@ impl ReplSession {
                 print!("\x1B[2J\x1B[1;1H");
                 Ok(false)
             }
+            ReplCommand::Break {
+                function,
+                condition,
+            } => {
+                self.executor
+                    .add_breakpoint(&function, condition.as_deref())?;
+                tracing::info!(
+                    "{}",
+                    Formatter::success(format!("Breakpoint set: {}", function).as_str())
+                );
+                Ok(false)
+            }
+            ReplCommand::ListBreaks => {
+                let breaks = self.executor.list_breakpoints();
+                if breaks.is_empty() {
+                    tracing::info!("{}", Formatter::info("No breakpoints set"));
+                } else {
+                    tracing::info!("{}", Formatter::success("Breakpoints:"));
+                    for bp in breaks {
+                        let cond = bp
+                            .condition
+                            .map(|c| format!(" (if {:?})", c))
+                            .unwrap_or_default();
+                        tracing::info!("  - {}{}", bp.function, cond);
+                    }
+                }
+                Ok(false)
+            }
+            ReplCommand::ClearBreak { function } => {
+                if self.executor.remove_breakpoint(&function) {
+                    tracing::info!(
+                        "{}",
+                        Formatter::success(format!("Breakpoint cleared: {}", function).as_str())
+                    );
+                } else {
+                    tracing::info!(
+                        "{}",
+                        Formatter::info(format!("No breakpoint found: {}", function).as_str())
+                    );
+                }
+                Ok(false)
+            }
+            ReplCommand::Functions => {
+                self.executor.display_functions()?;
+                Ok(false)
+            }
         }
     }
 
@@ -161,6 +308,22 @@ impl ReplSession {
         tracing::info!(
             "  {}                     Show this help message",
             Formatter::info("help")
+        );
+        tracing::info!(
+            "  {} <func> [cond] Set a breakpoint with optional condition",
+            Formatter::info("break")
+        );
+        tracing::info!(
+            "  {}                 List all active breakpoints",
+            Formatter::info("list-breaks")
+        );
+        tracing::info!(
+            "  {} <func>         Clear a specific breakpoint",
+            Formatter::info("clear-break")
+        );
+        tracing::info!(
+            "  {}                 Show available contract functions",
+            Formatter::info("functions")
         );
         tracing::info!(
             "  {}                     Exit the REPL",

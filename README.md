@@ -6,7 +6,8 @@
 
 A command-line debugger for Soroban smart contracts on the Stellar network. Debug your contracts interactively with breakpoints, step-through execution, state inspection, and budget tracking.
 
-Check out the [Getting Started Guide](https://github.com/Timi16/soroban-debugger/blob/main/docs/getting-started.md) to begin debugging in under 10 minutes, or see the [FAQ](https://github.com/Timi16/soroban-debugger/blob/main/docs/faq.md) for help with common issues.
+Check out the [Getting Started Guide](https://github.com/Timi16/soroban-debugger/blob/main/docs/getting-started.md) to begin debugging in under 10 minutes, see the [FAQ](https://github.com/Timi16/soroban-debugger/blob/main/docs/faq.md) for help with common issues, or refer to the [Troubleshooting Guide](https://github.com/Timi16/soroban-debugger/blob/main/docs/remote-troubleshooting.md) for environment-specific failures.
+For CI performance gating, see the [Benchmark Regression Policy](docs/performance-regressions.md).
 
 
 ## Features
@@ -131,7 +132,37 @@ Options:
       --storage-filter <PATTERN>  Filter storage by key pattern (repeatable)
   --batch-args <FILE>   Path to JSON file with array of argument sets for batch execution
   --watch               Watch the WASM file for changes and automatically re-run
+  --server              Start a remote debug server instead of executing locally
 ```
+
+### Server Command
+
+Start a remote debug server for remote debugger connections:
+
+```bash
+soroban-debug server [OPTIONS]
+
+# Also available via run command:
+soroban-debug run --server [OPTIONS]
+```
+
+Options:
+  -p, --port <PORT>     Port to listen on (default: 9229)
+  -t, --token <TOKEN>   Authentication token for remote clients
+  --tls-cert <FILE>     Path to TLS certificate for secure connections
+  --tls-key <FILE>      Path to TLS private key
+
+### Remote Troubleshooting Matrix
+
+| Symptom | Likely cause | What to try |
+| --- | --- | --- |
+| Request timed out | Slow host or timeout too low for inspect/storage traffic | Increase `soroban-debug remote --timeout-ms`, `--inspect-timeout-ms`, or `--storage-timeout-ms` depending on the failing request. |
+| Incompatible debugger protocol | Client and server builds are out of sync | Rebuild or reinstall the CLI/server from the same revision or release line. |
+| Authentication failed | Token missing or mismatched | Make sure the server `--token` and client `--token` values match exactly. |
+| Loopback/connect failure | `localhost` blocked, wrong port, firewall, or container networking issue | Verify the server is listening, try `127.0.0.1`, and check your environment's loopback/network policy. |
+
+See [docs/remote-troubleshooting.md](./docs/remote-troubleshooting.md) for the full CLI and VS Code troubleshooting guide, including timeout tuning and adapter-specific advice.
+
 
 ### Automatic Test Generation
 
@@ -194,6 +225,147 @@ The batch args file should contain a JSON array of test cases:
 ```
 
 See [docs/batch-execution.md](https://github.com/Timi16/soroban-debugger/blob/main/docs/batch-execution.md) for detailed documentation.
+
+### Symbolic Command
+
+Run symbolic execution to explore the contract's input space:
+
+```bash
+soroban-debug symbolic --contract my_contract.wasm --function my_func
+```
+
+#### Deterministic Seed and Replay Mode
+
+By default the exploration order is fixed (deterministic cartesian product). You can shuffle it
+with a seed to explore a different path set while still being able to reproduce the run exactly:
+
+```bash
+# Lock the exploration order with an explicit seed.
+soroban-debug symbolic --contract token.wasm --function transfer --seed 42
+
+# Output includes a replay token:
+# Replay token: 42 (reproduce with --replay 42)
+
+# Reproduce the identical run later (--replay is an alias for --seed):
+soroban-debug symbolic --contract token.wasm --function transfer --replay 42
+```
+
+The replay token is also embedded in the `--output` TOML file under `[metadata]` as `seed = 42`.
+Pass `--replay <token>` to any team member or CI job to reproduce a finding exactly.
+
+`--seed` and `--replay` are mutually exclusive (both set the same underlying seed; `--replay` is
+the user-facing name for the value printed in the report).
+
+#### Symbolic Options
+
+| Flag | Description |
+|------|-------------|
+| `--profile fast\|balanced\|deep` | Preset exploration budget |
+| `--path-cap N` | Max number of input combinations to execute |
+| `--input-combination-cap N` | Max number of input combinations to generate |
+| `--timeout SECONDS` | Overall analysis timeout |
+| `--seed N` | Shuffle exploration order with this seed (reproducible) |
+| `--replay TOKEN` | Reproduce a previous run using its replay token |
+| `--output FILE` | Write scenario TOML (includes seed in `[metadata]`) |
+
+### Scenario Command
+
+Run a multi-step test scenario defined in a TOML file:
+
+```bash
+soroban-debug scenario --scenario my_scenario.toml --contract my_contract.wasm --timeout 30
+```
+
+Each step can specify a function to call, its arguments, and assertions on the return value,
+contract storage, emitted events, and CPU/memory budget.
+
+Scenario timeouts inherit in this order: step `timeout_secs`, then top-level `[defaults].timeout_secs`,
+then the CLI `--timeout` value, and finally the built-in 30 second default. Use `0` to disable the
+timeout for a default or a specific step.
+
+```toml
+[defaults]
+timeout_secs = 10
+
+[[steps]]
+name = "Cheap setup"
+function = "initialize"
+expected_return = "()"
+
+[[steps]]
+name = "Expensive replay"
+function = "replay_heavy_case"
+timeout_secs = 0
+```
+
+#### Capturing Step Outputs into Variables
+
+A step can save its return value into a named variable using the `capture` field. Later steps
+can reference that variable using the `{{var_name}}` syntax in their `args` or `expected_return`
+fields. This lets multi-step scenarios remain free of hard-coded intermediate values.
+
+```toml
+[[steps]]
+name = "Mint tokens"
+function = "mint"
+args = '["Alice", 1000]'
+# Store the return value (e.g. the new total supply) in a variable.
+capture = "supply"
+
+[[steps]]
+name = "Check total supply"
+function = "total_supply"
+# Assert the next call returns whatever was captured above.
+expected_return = "{{supply}}"
+
+[[steps]]
+name = "Transfer using captured supply"
+function = "transfer"
+# Interpolate the captured value into the args JSON.
+args = '["Alice", "Bob", {{supply}}]'
+```
+
+If a step references a variable that has not been captured yet, the scenario fails immediately
+with a descriptive error listing the undefined variable name and the variables that are
+currently available.
+
+#### Scenario Step Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Optional human-readable label for the step |
+| `function` | string | Contract function to call |
+| `args` | string (JSON) | Function arguments as a JSON array. Supports `{{var}}` interpolation. |
+| `timeout_secs` | integer | Override the inherited execution timeout for this step. `0` disables timeout enforcement. |
+| `capture` | string | Variable name to store the return value in for use by later steps |
+| `expected_return` | string | Assert the return value equals this. Supports `{{var}}` interpolation. |
+| `expected_error` | string | Assert the step fails with an error message containing this substring |
+| `expected_panic` | string | Assert the step panics with a message containing this substring |
+| `expected_events` | array | Assert the step emits exactly these contract events |
+| `expected_storage` | table | Assert specific storage keys have these values after the step |
+| `budget_limits` | table | Assert CPU/memory usage stays within `max_cpu_instructions`/`max_memory_bytes` |
+
+### Source Map Caching
+
+When stepping through a contract the debugger maps WASM byte offsets to Rust
+source locations by parsing the embedded DWARF debug sections.  Parsing is
+O(WASM size) and was previously repeated on every `enable_instruction_debug`
+call, which became expensive during long stepping sessions.
+
+The source map is now cached per `DebuggerEngine` instance using a fast FNV-1a
+hash of the WASM bytes as the cache key:
+
+- **Cache hit** (same bytes): DWARF sections are not re-parsed; the existing
+  offset → source-location map is returned immediately.
+- **Cache miss** (bytes changed or first load): a full parse is performed and
+  the result is stored under the new hash.  This handles contract upgrades
+  and re-deployments transparently.
+- **Explicit invalidation**: call `source_map.invalidate_cache()` if you need
+  to force a re-parse even when the bytes appear identical.
+
+No user-facing flags are needed — the cache is managed automatically.  The
+`SourceMap::parse_count()` method is available to library users and tests for
+verifying that caching is active.
 
 ### Storage Filtering
 
@@ -307,8 +479,13 @@ soroban-debug inspect [OPTIONS]
 
 Options:
   -c, --contract <FILE>     Path to the contract WASM file
+      --source-map-diagnostics
+                            Print resolved mappings, missing DWARF sections, and fallback behavior
       --dependency-graph     Export cross-contract dependency graph (DOT + Mermaid)
 ```
+
+Use `soroban-debug inspect --contract my_contract.wasm --source-map-diagnostics --format json`
+when you want a non-interactive DWARF triage report for CI or editor tooling.
 
 For full examples, see [docs/dependency-graph.md](https://github.com/Timi16/soroban-debugger/blob/main/docs/dependency-graph.md).
 
@@ -662,6 +839,15 @@ To run the full benchmark suite:
 cargo bench
 ```
 
+To mirror the CI regression gate without switching your current checkout away from your branch, install `critcmp` and run:
+
+```bash
+cargo install critcmp --version 0.1.7
+bash scripts/check_benchmark_regressions.sh
+```
+
+The helper benchmarks your current tree, benchmarks `origin/main` in a temporary detached worktree when that ref is available, and compares the two saved Criterion baselines without mutating your working directory.
+
 ### Baseline Results (v0.1.0)
 
 | Component | Operation | Time (Baseline) |
@@ -768,21 +954,34 @@ Use structured JSON output for automation/CI with the `run` command:
 soroban-debug run --contract <path/to/contract.wasm> --function <fn> --output json
 ```
 
-Example output:
+Versioned envelope (stable contract across major machine-readable commands):
 
 ```json
 {
+  "schema_version": "1.0.0",
+  "command": "run",
   "status": "success",
   "result": {
-    "value": "42"
+    "result": "I64(42)",
+    "sha256": "4c29...<64 hex chars>...",
+    "budget": {
+      "cpu_instructions": 1200,
+      "memory_bytes": 2048
+    },
+    "storage_diff": {
+      "added": {},
+      "modified": {},
+      "deleted": []
+    }
   },
-  "budget": {
-    "cpu_instructions": 1200,
-    "memory_bytes": 2048
-  },
-  "errors": null
+  "error": null
 }
 ```
+
+Compatibility expectations:
+- `schema_version` is always present.
+- Within the same schema version, output changes are additive only.
+- Breaking output contract changes require a schema version bump.
 
 Default output mode remains pretty, human-readable output:
 

@@ -4,6 +4,30 @@ use std::any::Any;
 
 pub type PluginResult<T> = Result<T, PluginError>;
 
+/// Errors that can occur during plugin operations
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum PluginError {
+    /// Plugin initialization failed
+    #[error("Plugin initialization failed: {0}")]
+    InitializationFailed(String),
+
+    /// Plugin execution failed
+    #[error("Plugin execution failed: {0}")]
+    ExecutionFailed(String),
+
+    /// Plugin not found
+    #[error("Plugin not found: {0}")]
+    NotFound(String),
+
+    /// Invalid plugin
+    #[error("Invalid plugin: {0}")]
+    Invalid(String),
+
+    /// Version mismatch
+    #[error("Version mismatch: required {required}, found {found}")]
+    VersionMismatch { required: String, found: String },
+
+    /// Dependency error
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum PluginError {
     #[error("Plugin initialization failed: {0}")]
@@ -23,6 +47,18 @@ pub enum PluginError {
 
     #[error("Dependency error: {0}")]
     DependencyError(String),
+
+    /// Trust policy violation
+    #[error("Plugin trust policy violation: {0}")]
+    TrustViolation(String),
+
+    /// Plugin execution timed out under containment policy
+    #[error("Plugin timeout: {0}")]
+    Timeout(String),
+
+    /// Plugin has been temporarily disabled by the circuit breaker
+    #[error("Plugin circuit breaker open: {0}")]
+    CircuitOpen(String),
 }
 
 /// Custom CLI command that a plugin can provide
@@ -147,6 +183,15 @@ pub trait InspectorPlugin: Send + Sync {
 ///
 /// Every plugin shared library must export a function with this name
 /// that returns a boxed instance of the plugin.
+/// Current version of the plugin API
+pub const PLUGIN_API_VERSION: u32 = 1;
+
+/// Symbol name for the plugin API version function
+pub const PLUGIN_VERSION_SYMBOL: &str = "plugin_api_version";
+
+/// Type of the plugin API version function
+pub type PluginVersionFn = unsafe fn() -> u32;
+
 pub const PLUGIN_CONSTRUCTOR_SYMBOL: &str = "create_plugin";
 
 /// Type of the plugin constructor function
@@ -183,6 +228,7 @@ mod tests {
             },
             library: "test.so".to_string(),
             dependencies: vec![],
+            signature: None,
         };
 
         let plugin = TestPlugin {

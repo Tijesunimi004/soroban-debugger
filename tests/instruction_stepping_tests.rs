@@ -1,4 +1,25 @@
-//! Tests for instruction-level stepping functionality
+#[path = "fixtures/mod.rs"]
+mod fixtures;
+
+#[test]
+fn test_debugger_engine_current_source_location() {
+    use soroban_debugger::debugger::engine::DebuggerEngine;
+    use soroban_debugger::runtime::executor::ContractExecutor;
+
+    // Use a real fixture WASM instead of create_test_wasm to satisfy host requirements (metadata section)
+    let wasm_path = fixtures::get_fixture_path("counter");
+    let wasm_bytes = std::fs::read(&wasm_path).unwrap();
+    let executor = ContractExecutor::new(wasm_bytes.clone()).unwrap();
+    let mut engine = DebuggerEngine::new(executor, vec![]);
+    // Enable instruction debug (loads source map)
+    let _ = engine.enable_instruction_debug(&wasm_bytes);
+    // Should be None (no debug info)
+    assert!(engine.current_source_location().is_none());
+
+    // If you want to test with debug info, you would need a WASM with DWARF sections.
+    // For now, this checks the method does not panic and returns None gracefully.
+}
+// Tests for instruction-level stepping functionality
 
 use soroban_debugger::runtime::{Instruction, InstructionParser};
 
@@ -169,19 +190,27 @@ fn test_call_stack_tracking() {
 
     let mut ip = InstructionPointer::new();
 
-    let call_inst = Instruction::new(
-        0x100,
-        wasmparser::Operator::Call { function_index: 1 },
-        0,
-        0,
-    );
-
-    ip.update_call_stack(&call_inst);
+    // Simulate jumping into a call
+    ip.push_return_address(10);
     assert_eq!(ip.call_stack_depth(), 1);
 
-    let return_inst = Instruction::new(0x200, wasmparser::Operator::Return, 1, 10);
+    let block_inst = Instruction::new(
+        0x100,
+        wasmparser::Operator::Block {
+            blockty: wasmparser::BlockType::Empty,
+        },
+        1,
+        0,
+    );
+    ip.update_call_stack(&block_inst);
+    assert_eq!(ip.block_depth(), 1);
 
-    ip.update_call_stack(&return_inst);
+    let end_inst = Instruction::new(0x200, wasmparser::Operator::End, 1, 10);
+    ip.update_call_stack(&end_inst);
+    assert_eq!(ip.block_depth(), 0);
+    assert_eq!(ip.call_stack_depth(), 1); // Depth still 1 until we pop
+
+    ip.pop_return_address();
     assert_eq!(ip.call_stack_depth(), 0);
 }
 

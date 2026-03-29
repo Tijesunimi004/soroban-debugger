@@ -2,13 +2,455 @@ use crate::analyzer::upgrade::WasmType;
 use crate::{DebuggerError, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::Path;
-use wasmparser::{Parser, Payload, ValType};
+use wasmparser::{Operator, Parser, Payload, ValType};
 
 // Re-export FunctionSignature for convenience
 pub use crate::analyzer::upgrade::FunctionSignature;
 // ─── existing public API (unchanged) ─────────────────────────────────────────
+
+// ─── arithmetic analysis (new) ────────────────────────────────────────────────
+
+/// Decoded WASM instruction for arithmetic analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WasmInstruction {
+    I32Add,
+    I32Sub,
+    I32Mul,
+    I64Add,
+    I64Sub,
+    I64Mul,
+    If,
+    BrIf,
+    Call,
+    I32Const,
+    Unknown(u8),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompareKind {
+    Eqz,
+    Eq,
+    Ne,
+    LtS,
+    LtU,
+    GtS,
+    GtU,
+    LeS,
+    LeU,
+    GeS,
+    GeU,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BranchKind {
+    If,
+    BrIf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArithmeticConfidence {
+    High,
+    Medium,
+    Low,
+}
+
+impl ArithmeticConfidence {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::High => "high",
+            Self::Medium => "medium",
+            Self::Low => "low",
+        }
+    }
+
+    pub fn score(&self) -> f32 {
+        match self {
+            Self::High => 0.95,
+            Self::Medium => 0.70,
+            Self::Low => 0.40,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ArithmeticOpAnalysis {
+    pub function_index: u32,
+    pub instruction_index: usize,
+    pub offset: usize,
+    pub instruction: WasmInstruction,
+    pub confidence: ArithmeticConfidence,
+    pub rationale: String,
+}
+
+/// Decode a single WASM instruction byte to its instruction type.
+fn decode_instruction(byte: u8) -> WasmInstruction {
+    match byte {
+        0x6A => WasmInstruction::I32Add,
+        0x6B => WasmInstruction::I32Sub,
+        0x6C => WasmInstruction::I32Mul,
+        0x7C => WasmInstruction::I64Add,
+        0x7D => WasmInstruction::I64Sub,
+        0x7E => WasmInstruction::I64Mul,
+        0x04 => WasmInstruction::If,
+        0x0D => WasmInstruction::BrIf,
+        0x10 => WasmInstruction::Call,
+        0x41 => WasmInstruction::I32Const,
+        other => WasmInstruction::Unknown(other),
+    }
+}
+
+/// Parse WASM bytecode into a vector of instructions (single-pass linear scan).
+pub fn parse_instructions(wasm: &[u8]) -> Vec<WasmInstruction> {
+    wasm.iter().map(|b| decode_instruction(*b)).collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StackValueKind {
+    Unknown,
+    Compare(CompareKind),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StackValue {
+    arithmetic_dependencies: BTreeSet<usize>,
+    kind: StackValueKind,
+}
+
+impl StackValue {
+    fn unknown() -> Self {
+        Self {
+            arithmetic_dependencies: BTreeSet::new(),
+            kind: StackValueKind::Unknown,
+        }
+    }
+
+    fn from_arithmetic(arithmetic_index: usize) -> Self {
+        let mut arithmetic_dependencies = BTreeSet::new();
+        arithmetic_dependencies.insert(arithmetic_index);
+        Self {
+            arithmetic_dependencies,
+            kind: StackValueKind::Unknown,
+        }
+    }
+
+    fn merge(kind: StackValueKind, inputs: impl IntoIterator<Item = StackValue>) -> Self {
+        let mut arithmetic_dependencies = BTreeSet::new();
+        for value in inputs {
+            arithmetic_dependencies.extend(value.arithmetic_dependencies);
+        }
+        Self {
+            arithmetic_dependencies,
+            kind,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct ArithmeticObservations {
+    compare_guards: Vec<(CompareKind, BranchKind)>,
+    compares_without_branch: Vec<CompareKind>,
+    direct_branches: Vec<BranchKind>,
+}
+
+pub fn analyze_arithmetic_ops(wasm: &[u8]) -> Result<Vec<ArithmeticOpAnalysis>> {
+    let mut findings = Vec::new();
+    let mut saw_code = false;
+    let mut function_index = 0u32;
+
+    for payload in Parser::new(0).parse_all(wasm) {
+        let payload = match payload {
+            Ok(payload) => payload,
+            Err(_) => {
+                return Ok(analyze_raw_arithmetic_ops(wasm));
+            }
+        };
+
+        if let Payload::CodeSectionEntry(body) = payload {
+            saw_code = true;
+            findings.extend(analyze_function_arithmetic(body, function_index)?);
+            function_index += 1;
+        }
+    }
+
+    if saw_code {
+        Ok(findings)
+    } else {
+        Ok(analyze_raw_arithmetic_ops(wasm))
+    }
+}
+
+fn analyze_function_arithmetic(
+    body: wasmparser::FunctionBody<'_>,
+    function_index: u32,
+) -> Result<Vec<ArithmeticOpAnalysis>> {
+    let mut stack = Vec::<StackValue>::new();
+    let mut locals = HashMap::<u32, StackValue>::new();
+    let mut arithmetic_ops = Vec::<(usize, usize, WasmInstruction)>::new();
+    let mut observations = Vec::<ArithmeticObservations>::new();
+
+    let mut reader = body.get_operators_reader().map_err(|e| {
+        DebuggerError::WasmLoadError(format!("Failed to read function operators: {}", e))
+    })?;
+    let mut instruction_index = 0usize;
+
+    while !reader.eof() {
+        let offset = reader.original_position();
+        let op = reader
+            .read()
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to read operator: {}", e)))?;
+
+        match op {
+            Operator::LocalGet { local_index } => {
+                let value = locals
+                    .get(&local_index)
+                    .cloned()
+                    .unwrap_or_else(StackValue::unknown);
+                stack.push(value);
+            }
+            Operator::LocalSet { local_index } => {
+                let value = stack.pop().unwrap_or_else(StackValue::unknown);
+                locals.insert(local_index, value);
+            }
+            Operator::LocalTee { local_index } => {
+                let value = stack.pop().unwrap_or_else(StackValue::unknown);
+                locals.insert(local_index, value.clone());
+                stack.push(value);
+            }
+            Operator::I32Const { .. } | Operator::I64Const { .. } => {
+                stack.push(StackValue::unknown());
+            }
+            Operator::Drop => {
+                let _ = stack.pop();
+            }
+            Operator::Select => {
+                let _condition = stack.pop();
+                let fallback = stack.pop().unwrap_or_else(StackValue::unknown);
+                let primary = stack.pop().unwrap_or_else(StackValue::unknown);
+                stack.push(StackValue::merge(
+                    StackValueKind::Unknown,
+                    [primary, fallback],
+                ));
+            }
+            Operator::I32Add
+            | Operator::I32Sub
+            | Operator::I32Mul
+            | Operator::I64Add
+            | Operator::I64Sub
+            | Operator::I64Mul => {
+                let _rhs = stack.pop();
+                let _lhs = stack.pop();
+                let arithmetic_index = arithmetic_ops.len();
+                let instruction = match op {
+                    Operator::I32Add => WasmInstruction::I32Add,
+                    Operator::I32Sub => WasmInstruction::I32Sub,
+                    Operator::I32Mul => WasmInstruction::I32Mul,
+                    Operator::I64Add => WasmInstruction::I64Add,
+                    Operator::I64Sub => WasmInstruction::I64Sub,
+                    Operator::I64Mul => WasmInstruction::I64Mul,
+                    _ => unreachable!(),
+                };
+                arithmetic_ops.push((instruction_index, offset, instruction));
+                observations.push(ArithmeticObservations::default());
+                stack.push(StackValue::from_arithmetic(arithmetic_index));
+            }
+            Operator::I32Eqz | Operator::I64Eqz => {
+                let value = stack.pop().unwrap_or_else(StackValue::unknown);
+                note_compare(
+                    &mut observations,
+                    &value.arithmetic_dependencies,
+                    CompareKind::Eqz,
+                );
+                stack.push(StackValue::merge(
+                    StackValueKind::Compare(CompareKind::Eqz),
+                    [value],
+                ));
+            }
+            Operator::I32Eq
+            | Operator::I32Ne
+            | Operator::I32LtS
+            | Operator::I32LtU
+            | Operator::I32GtS
+            | Operator::I32GtU
+            | Operator::I32LeS
+            | Operator::I32LeU
+            | Operator::I32GeS
+            | Operator::I32GeU
+            | Operator::I64Eq
+            | Operator::I64Ne
+            | Operator::I64LtS
+            | Operator::I64LtU
+            | Operator::I64GtS
+            | Operator::I64GtU
+            | Operator::I64LeS
+            | Operator::I64LeU
+            | Operator::I64GeS
+            | Operator::I64GeU => {
+                let rhs = stack.pop().unwrap_or_else(StackValue::unknown);
+                let lhs = stack.pop().unwrap_or_else(StackValue::unknown);
+                let compare_kind = compare_kind(&op).expect("comparison operator expected");
+                let deps = StackValue::merge(StackValueKind::Compare(compare_kind), [lhs, rhs]);
+                note_compare(
+                    &mut observations,
+                    &deps.arithmetic_dependencies,
+                    compare_kind,
+                );
+                stack.push(deps);
+            }
+            Operator::If { .. } => {
+                let condition = stack.pop().unwrap_or_else(StackValue::unknown);
+                note_branch(&mut observations, &condition, BranchKind::If);
+            }
+            Operator::BrIf { .. } => {
+                let condition = stack.pop().unwrap_or_else(StackValue::unknown);
+                note_branch(&mut observations, &condition, BranchKind::BrIf);
+            }
+            _ => {}
+        }
+
+        instruction_index += 1;
+    }
+
+    Ok(arithmetic_ops
+        .into_iter()
+        .enumerate()
+        .filter_map(|(arith_index, (instruction_index, offset, instruction))| {
+            classify_arithmetic_observation(
+                function_index,
+                instruction_index,
+                offset,
+                instruction,
+                &observations[arith_index],
+            )
+        })
+        .collect())
+}
+
+fn note_compare(
+    observations: &mut [ArithmeticObservations],
+    dependencies: &BTreeSet<usize>,
+    compare_kind: CompareKind,
+) {
+    for dependency in dependencies {
+        if let Some(observation) = observations.get_mut(*dependency) {
+            observation.compares_without_branch.push(compare_kind);
+        }
+    }
+}
+
+fn note_branch(
+    observations: &mut [ArithmeticObservations],
+    condition: &StackValue,
+    branch_kind: BranchKind,
+) {
+    for dependency in &condition.arithmetic_dependencies {
+        if let Some(observation) = observations.get_mut(*dependency) {
+            match condition.kind {
+                StackValueKind::Compare(compare_kind) => {
+                    observation.compare_guards.push((compare_kind, branch_kind));
+                    if let Some(position) = observation
+                        .compares_without_branch
+                        .iter()
+                        .position(|kind| *kind == compare_kind)
+                    {
+                        observation.compares_without_branch.remove(position);
+                    }
+                }
+                StackValueKind::Unknown => observation.direct_branches.push(branch_kind),
+            }
+        }
+    }
+}
+
+fn classify_arithmetic_observation(
+    function_index: u32,
+    instruction_index: usize,
+    offset: usize,
+    instruction: WasmInstruction,
+    observation: &ArithmeticObservations,
+) -> Option<ArithmeticOpAnalysis> {
+    if !observation.compare_guards.is_empty() {
+        return None;
+    }
+
+    let (confidence, rationale) = if !observation.direct_branches.is_empty() {
+        (
+            ArithmeticConfidence::Low,
+            format!(
+                "The arithmetic result influences {:?}, but no recognized compare-and-branch guard was observed.",
+                observation.direct_branches
+            ),
+        )
+    } else if !observation.compares_without_branch.is_empty() {
+        (
+            ArithmeticConfidence::Medium,
+            format!(
+                "The arithmetic result is compared via {:?}, but that comparison does not drive conditional control flow.",
+                observation.compares_without_branch
+            ),
+        )
+    } else {
+        (
+            ArithmeticConfidence::High,
+            "No comparison-derived conditional branch was observed for the arithmetic result."
+                .to_string(),
+        )
+    };
+
+    Some(ArithmeticOpAnalysis {
+        function_index,
+        instruction_index,
+        offset,
+        instruction,
+        confidence,
+        rationale,
+    })
+}
+
+fn compare_kind(op: &Operator<'_>) -> Option<CompareKind> {
+    match op {
+        Operator::I32Eqz | Operator::I64Eqz => Some(CompareKind::Eqz),
+        Operator::I32Eq | Operator::I64Eq => Some(CompareKind::Eq),
+        Operator::I32Ne | Operator::I64Ne => Some(CompareKind::Ne),
+        Operator::I32LtS | Operator::I64LtS => Some(CompareKind::LtS),
+        Operator::I32LtU | Operator::I64LtU => Some(CompareKind::LtU),
+        Operator::I32GtS | Operator::I64GtS => Some(CompareKind::GtS),
+        Operator::I32GtU | Operator::I64GtU => Some(CompareKind::GtU),
+        Operator::I32LeS | Operator::I64LeS => Some(CompareKind::LeS),
+        Operator::I32LeU | Operator::I64LeU => Some(CompareKind::LeU),
+        Operator::I32GeS | Operator::I64GeS => Some(CompareKind::GeS),
+        Operator::I32GeU | Operator::I64GeU => Some(CompareKind::GeU),
+        _ => None,
+    }
+}
+
+fn analyze_raw_arithmetic_ops(wasm: &[u8]) -> Vec<ArithmeticOpAnalysis> {
+    parse_instructions(wasm)
+        .into_iter()
+        .enumerate()
+        .filter(|(_, instruction)| {
+            matches!(
+                instruction,
+                WasmInstruction::I32Add
+                    | WasmInstruction::I32Sub
+                    | WasmInstruction::I32Mul
+                    | WasmInstruction::I64Add
+                    | WasmInstruction::I64Sub
+                    | WasmInstruction::I64Mul
+            )
+        })
+        .map(|(instruction_index, instruction)| ArithmeticOpAnalysis {
+            function_index: 0,
+            instruction_index,
+            offset: instruction_index,
+            instruction,
+            confidence: ArithmeticConfidence::High,
+            rationale: "The input is not a structured WASM module, so no semantic guard analysis was possible.".to_string(),
+        })
+        .collect()
+}
 
 /// Compute the SHA-256 checksum of a WASM binary.
 pub fn compute_checksum(wasm_bytes: &[u8]) -> String {
@@ -193,6 +635,22 @@ pub fn get_module_info(wasm_bytes: &[u8]) -> Result<ModuleInfo> {
     Ok(info)
 }
 
+/// Returns the byte range of the WASM code section payload within the module, if present.
+///
+/// This range is suitable for normalizing DWARF line-program addresses that are expressed
+/// as offsets into the code section.
+pub fn code_section_range(wasm_bytes: &[u8]) -> Result<Option<std::ops::Range<usize>>> {
+    for payload in Parser::new(0).parse_all(wasm_bytes) {
+        let payload = payload
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to parse WASM: {}", e)))?;
+        if let Payload::CodeSectionStart { range, .. } = payload {
+            return Ok(Some(range));
+        }
+    }
+
+    Ok(None)
+}
+
 /// Information about a WASM module.
 #[derive(Debug, Default, Serialize)]
 pub struct ModuleInfo {
@@ -247,10 +705,10 @@ pub fn load_wasm<P: AsRef<Path>>(path: P) -> Result<WasmFile> {
 pub fn verify_wasm_hash(computed_hash: &str, expected_hash: Option<&String>) -> Result<()> {
     if let Some(expected) = expected_hash {
         if expected.to_lowercase() != computed_hash {
-            return Err(crate::DebuggerError::ChecksumMismatch {
-                expected: expected.clone(),
-                actual: computed_hash.to_string(),
-            }
+            return Err(crate::DebuggerError::ChecksumMismatch(
+                expected.clone(),
+                computed_hash.to_string(),
+            )
             .into());
         }
     }
@@ -686,10 +1144,7 @@ mod tests {
         let err = result.unwrap_err();
         // Downcast back to DebuggerError to check the variant
         match err.downcast_ref::<crate::DebuggerError>() {
-            Some(crate::DebuggerError::ChecksumMismatch {
-                expected: e,
-                actual: a,
-            }) => {
+            Some(crate::DebuggerError::ChecksumMismatch(e, a)) => {
                 assert_eq!(e, "wronghash999");
                 assert_eq!(a, "abcdef123456");
             }

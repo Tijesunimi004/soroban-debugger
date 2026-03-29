@@ -129,6 +129,38 @@ impl BudgetInspector {
             None
         }
     }
+
+    pub fn format_cpu_insns(value: u64) -> String {
+        const K: u64 = 1_000;
+        const M: u64 = 1_000_000;
+        const B: u64 = 1_000_000_000;
+
+        if value >= B {
+            format!("{:.2}B", value as f64 / B as f64)
+        } else if value >= M {
+            format!("{:.2}M", value as f64 / M as f64)
+        } else if value >= K {
+            format!("{:.2}K", value as f64 / K as f64)
+        } else {
+            value.to_string()
+        }
+    }
+
+    pub fn format_memory_bytes(bytes: u64) -> String {
+        const KB: u64 = 1024;
+        const MB: u64 = 1024 * KB;
+        const GB: u64 = 1024 * MB;
+
+        if bytes >= GB {
+            format!("{:.2} GB", bytes as f64 / GB as f64)
+        } else if bytes >= MB {
+            format!("{:.2} MB", bytes as f64 / MB as f64)
+        } else if bytes >= KB {
+            format!("{:.2} KB", bytes as f64 / KB as f64)
+        } else {
+            format!("{} B", bytes)
+        }
+    }
 }
 
 /// Severity level for budget warnings
@@ -147,7 +179,7 @@ pub struct BudgetWarning {
 }
 
 /// Budget information snapshot
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BudgetInfo {
     pub cpu_instructions: u64,
     pub cpu_limit: u64,
@@ -171,6 +203,18 @@ impl BudgetInfo {
             0.0
         } else {
             (self.memory_bytes as f64 / self.memory_limit as f64) * 100.0
+        }
+    }
+
+    /// Compute the resource usage delta relative to an earlier snapshot.
+    pub fn delta_from(&self, previous: &BudgetInfo) -> BudgetInfo {
+        BudgetInfo {
+            cpu_instructions: self
+                .cpu_instructions
+                .saturating_sub(previous.cpu_instructions),
+            cpu_limit: self.cpu_limit,
+            memory_bytes: self.memory_bytes.saturating_sub(previous.memory_bytes),
+            memory_limit: self.memory_limit,
         }
     }
 }
@@ -241,6 +285,28 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         assert!(matches!(warnings[0].severity, Severity::Critical));
         assert!(warnings[0].suggestion.is_some());
+    }
+
+    #[test]
+    fn test_budget_delta_from_previous_snapshot() {
+        let previous = BudgetInfo {
+            cpu_instructions: 10,
+            cpu_limit: 100,
+            memory_bytes: 20,
+            memory_limit: 200,
+        };
+        let current = BudgetInfo {
+            cpu_instructions: 35,
+            cpu_limit: 100,
+            memory_bytes: 45,
+            memory_limit: 200,
+        };
+
+        let delta = current.delta_from(&previous);
+        assert_eq!(delta.cpu_instructions, 25);
+        assert_eq!(delta.memory_bytes, 25);
+        assert_eq!(delta.cpu_limit, 100);
+        assert_eq!(delta.memory_limit, 200);
     }
 }
 

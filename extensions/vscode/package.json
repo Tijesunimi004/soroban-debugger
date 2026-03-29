@@ -1,4 +1,5 @@
 {
+  "$schema": "./package.schema.json",
   "name": "soroban-debugger",
   "displayName": "Soroban Debugger",
   "description": "Debug adapter for Soroban smart contracts with breakpoints, variable inspection, and call stack visualization",
@@ -24,11 +25,37 @@
     "smart-contract"
   ],
   "activationEvents": [
-    "onDebugResolve:soroban",
-    "onCommand:soroban-debugger.getProgramName"
+    "onDebugResolve:soroban"
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "soroban-debugger.runLaunchPreflight",
+        "title": "Soroban: Run Launch Preflight",
+        "category": "Soroban"
+      },
+      {
+        "command": "soroban-debugger.diagnoseSourceMap",
+        "title": "Soroban: Diagnose Source Maps for Current File",
+        "category": "Soroban"
+      }
+    ],
+    "configuration": {
+      "title": "Soroban Debugger",
+      "properties": {
+        "soroban-debugger.requestTimeoutMs": {
+          "type": "number",
+          "default": 30000,
+          "description": "Per-request timeout (ms) for backend wire-protocol calls before the debug session fails as unhealthy."
+        },
+        "soroban-debugger.connectTimeoutMs": {
+          "type": "number",
+          "default": 10000,
+          "description": "Timeout (ms) to wait for the backend server to become reachable during launch."
+        }
+      }
+    },
     "debuggers": [
       {
         "type": "soroban",
@@ -46,28 +73,132 @@
             "properties": {
               "contractPath": {
                 "type": "string",
-                "description": "Path to Soroban contract WASM file",
+                "description": "Path to a readable Soroban contract WASM file",
                 "default": "${workspaceFolder}/target/wasm32-unknown-unknown/release/contract.wasm"
               },
               "snapshotPath": {
                 "type": "string",
-                "description": "Path to snapshot JSON file for simulator state",
+                "description": "Optional path to a readable snapshot JSON file for simulator state",
                 "default": "${workspaceFolder}/snapshot.json"
               },
               "entrypoint": {
                 "type": "string",
-                "description": "Smart contract function to debug",
+                "description": "Non-empty smart contract function name to debug",
                 "default": "main"
               },
               "args": {
                 "type": "array",
-                "description": "Arguments to pass to the contract function",
+                "description": "JSON-serializable arguments to pass to the contract function",
                 "default": []
               },
               "trace": {
                 "type": "boolean",
                 "description": "Enable detailed trace logging",
                 "default": false
+              },
+              "binaryPath": {
+                "type": "string",
+                "description": "Optional path to a readable soroban-debug binary to launch"
+              },
+              "port": {
+                "type": "integer",
+                "description": "Optional TCP port for the debugger server. Must be between 1 and 65535.",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "token": {
+                "type": "string",
+                "description": "Optional single-line authentication token for the debugger server.",
+                "minLength": 1,
+                "pattern": ".*\\S.*"
+              },
+              "storageFilter": {
+                "type": "array",
+                "description": "Filter storage view to only show keys matching pattern (e.g. ['balance:*', 're:^contract_.*']).",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              },
+              "repeat": {
+                "type": "integer",
+                "description": "Repeat execution N times and show throughput/latency stats in the Debug Console.",
+                "minimum": 1,
+                "default": 1
+              }
+            }
+          },
+          "attach": {
+            "required": [
+              "contractPath",
+              "port"
+            ],
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "Hostname or IP address of the already-running soroban-debug server.",
+                "default": "127.0.0.1"
+              },
+              "port": {
+                "type": "integer",
+                "description": "TCP port of the already-running soroban-debug server. Must be between 1 and 65535.",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "contractPath": {
+                "type": "string",
+                "description": "Path to a readable Soroban contract WASM file",
+                "default": "${workspaceFolder}/target/wasm32-unknown-unknown/release/contract.wasm"
+              },
+              "snapshotPath": {
+                "type": "string",
+                "description": "Optional path to a readable snapshot JSON file for simulator state",
+                "default": "${workspaceFolder}/snapshot.json"
+              },
+              "entrypoint": {
+                "type": "string",
+                "description": "Non-empty smart contract function name to debug",
+                "default": "main"
+              },
+              "args": {
+                "type": "array",
+                "description": "JSON-serializable arguments to pass to the contract function",
+                "default": []
+              },
+              "token": {
+                "type": "string",
+                "description": "Optional single-line authentication token for the remote debugger server.",
+                "minLength": 1,
+                "pattern": ".*\\S.*"
+              },
+              "trace": {
+                "type": "boolean",
+                "description": "Enable detailed trace logging",
+                "default": false
+              },
+              "requestTimeoutMs": {
+                "type": "number",
+                "description": "Per-request timeout (ms) for backend wire-protocol calls.",
+                "default": 30000
+              },
+              "connectTimeoutMs": {
+                "type": "number",
+                "description": "Timeout (ms) to wait for the remote server to become reachable.",
+                "default": 10000
+              },
+              "storageFilter": {
+                "type": "array",
+                "description": "Filter storage view to only show keys matching pattern.",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              },
+              "repeat": {
+                "type": "integer",
+                "description": "Repeat execution N times and show throughput/latency stats.",
+                "minimum": 1,
+                "default": 1
               }
             }
           }
@@ -81,7 +212,8 @@
             "snapshotPath": "${workspaceFolder}/snapshot.json",
             "entrypoint": "main",
             "args": [],
-            "trace": false
+            "trace": false,
+            "binaryPath": "${workspaceFolder}/target/debug/soroban-debug"
           }
         ],
         "configurationSnippets": [
@@ -92,11 +224,26 @@
               "name": "Soroban: Debug Contract",
               "type": "soroban",
               "request": "launch",
-              "contractPath": "^\"\\${workspaceFolder}/target/wasm32-unknown-unknown/release/contract.wasm\"",
-              "snapshotPath": "^\"\\${workspaceFolder}/snapshot.json\"",
+              "contractPath": "${workspaceFolder}/target/wasm32-unknown-unknown/release/contract.wasm",
+              "snapshotPath": "${workspaceFolder}/snapshot.json",
               "entrypoint": "main",
               "args": [],
-              "trace": false
+              "trace": false,
+              "binaryPath": "${workspaceFolder}/target/debug/soroban-debug"
+            }
+          },
+          {
+            "label": "Soroban: Attach to Remote Debugger",
+            "description": "Attach to an already-running soroban-debug server",
+            "body": {
+              "name": "Soroban: Attach to Remote Debugger",
+              "type": "soroban",
+              "request": "attach",
+              "host": "127.0.0.1",
+              "port": 2345,
+              "contractPath": "${workspaceFolder}/target/wasm32-unknown-unknown/release/contract.wasm",
+              "entrypoint": "main",
+              "args": []
             }
           }
         ]
@@ -108,11 +255,16 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
-    "test": "node ./out/test/runTest.js",
-    "build": "npm run compile"
+    "build": "npm run compile",
+    "test": "npm run test:smoke && npm run test:dap-e2e",
+    "ci": "npm run build && npm run test",
+    "test:all": "node ./dist/test/runTest.js",
+    "test:smoke": "node ./dist/test/runSmokeTest.js",
+    "test:dap-e2e": "node ./dist/test/runDapE2E.js",
+    "test:dap-e2e:repeat": "node ./dist/test/runDapE2E.js --repeat 10"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^20.19.37",
     "@types/vscode": "^1.75.0",
     "@vscode/debugprotocol": "^1.65.0",
     "typescript": "^5.0.0"

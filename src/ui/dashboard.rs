@@ -54,6 +54,7 @@ const COLOR_MEM_FILL: Color = Color::Rgb(72, 199, 142);
 // ─── Pane enum ───────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivePane {
+    Execution,
     CallStack,
     Storage,
     Budget,
@@ -63,16 +64,18 @@ pub enum ActivePane {
 impl ActivePane {
     fn next(self) -> Self {
         match self {
+            ActivePane::Execution => ActivePane::CallStack,
             ActivePane::CallStack => ActivePane::Storage,
             ActivePane::Storage => ActivePane::Budget,
             ActivePane::Budget => ActivePane::Log,
-            ActivePane::Log => ActivePane::CallStack,
+            ActivePane::Log => ActivePane::Execution,
         }
     }
 
     fn prev(self) -> Self {
         match self {
-            ActivePane::CallStack => ActivePane::Log,
+            ActivePane::Execution => ActivePane::Log,
+            ActivePane::CallStack => ActivePane::Execution,
             ActivePane::Storage => ActivePane::CallStack,
             ActivePane::Budget => ActivePane::Storage,
             ActivePane::Log => ActivePane::Budget,
@@ -81,6 +84,7 @@ impl ActivePane {
 
     fn label(self) -> &'static str {
         match self {
+            ActivePane::Execution => "Execution",
             ActivePane::CallStack => "Call Stack",
             ActivePane::Storage => "Storage",
             ActivePane::Budget => "Budget Meters",
@@ -89,10 +93,21 @@ impl ActivePane {
     }
 }
 
+#[derive(Debug, Clone)]
+struct PendingExecution {
+    function: String,
+    args: Option<String>,
+}
+
 // ─── TUI state ───────────────────────────────────────────────────────────────
 pub struct DashboardApp {
     engine: DebuggerEngine,
     active_pane: ActivePane,
+
+    // Execution pane
+    pending_execution: Option<PendingExecution>,
+    last_result: Option<String>,
+    last_error: Option<String>,
 
     // Call stack pane
     call_stack_frames: Vec<CallFrame>,
@@ -145,9 +160,25 @@ enum StatusKind {
 
 impl DashboardApp {
     pub fn new(engine: DebuggerEngine, function_name: String) -> Self {
+        let pending_execution = if engine.is_paused() {
+            engine.state().lock().ok().and_then(|state| {
+                state.current_function().map(|f| PendingExecution {
+                    function: f.to_string(),
+                    args: state.current_args().map(str::to_string),
+                })
+            })
+        } else {
+            None
+        };
+
         let mut app = Self {
             engine,
             active_pane: ActivePane::CallStack,
+
+            pending_execution,
+            last_result: None,
+            last_error: None,
+
             call_stack_frames: Vec::new(),
             call_stack_state: {
                 let mut state = ListState::default();
@@ -187,6 +218,17 @@ impl DashboardApp {
             LogLevel::Info,
             format!("Contract function: {}", app.function_name),
         );
+        if let Some(pending) = &app.pending_execution {
+            let args = pending.args.as_deref().unwrap_or("(none)");
+            app.push_log(
+                LogLevel::Info,
+                format!("Staged: {} args={}", pending.function, args),
+            );
+            app.status_message = Some((
+                "Press 'c' to execute staged call".to_string(),
+                StatusKind::Info,
+            ));
+        }
 
         app.refresh_state();
         app
@@ -248,14 +290,17 @@ impl DashboardApp {
         self.budget_history_mem.push_back(mem_pct);
 
         // ── Storage ────────────────────────────────────────────────────
-        // Storage displayed from the engine's internal inspector
-        let new_entries: Vec<(String, String)> = {
-            let inspector = crate::inspector::StorageInspector::new();
-            let all = inspector.get_all();
-            let mut v: Vec<(String, String)> =
-                all.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            v.sort_by(|a, b| a.0.cmp(&b.0));
-            v
+        let new_entries: Vec<(String, String)> = match self.engine.executor().get_storage_snapshot()
+        {
+            Ok(snapshot) => {
+                let mut v: Vec<(String, String)> = snapshot.into_iter().collect();
+                v.sort_by(|a, b| a.0.cmp(&b.0));
+                v
+            }
+            Err(e) => {
+                self.push_log(LogLevel::Error, format!("Storage snapshot failed: {}", e));
+                Vec::new()
+            }
         };
 
         if new_entries.len() != self.storage_entries.len() {
@@ -291,14 +336,38 @@ impl DashboardApp {
 
     // ── Continue action ──────────────────────────────────────────────────────
     fn do_continue(&mut self) {
-        match self.engine.continue_execution() {
-            Ok(()) => {
-                self.push_log(LogLevel::Info, "Execution continuing…".to_string());
-                self.status_message = Some(("Running…".to_string(), StatusKind::Info));
+        if let Some(pending) = self.pending_execution.take() {
+            self.push_log(LogLevel::Info, format!("Executing {}…", pending.function));
+            match self
+                .engine
+                .execute_without_breakpoints(&pending.function, pending.args.as_deref())
+            {
+                Ok(output) => {
+                    self.last_error = None;
+                    self.last_result = Some(output.clone());
+                    self.push_log(LogLevel::Info, format!("Result: {}", output));
+                    self.status_message =
+                        Some(("Execution complete".to_string(), StatusKind::Info));
+                }
+                Err(e) => {
+                    self.last_result = None;
+                    self.last_error = Some(e.to_string());
+                    self.push_log(LogLevel::Error, format!("Execution failed: {}", e));
+                    self.status_message =
+                        Some((format!("Execution error: {}", e), StatusKind::Error));
+                }
             }
-            Err(e) => {
-                self.push_log(LogLevel::Error, format!("Continue failed: {}", e));
-                self.status_message = Some((format!("Continue error: {}", e), StatusKind::Error));
+        } else {
+            match self.engine.continue_execution() {
+                Ok(()) => {
+                    self.push_log(LogLevel::Info, "Execution continuing…".to_string());
+                    self.status_message = Some(("Running…".to_string(), StatusKind::Info));
+                }
+                Err(e) => {
+                    self.push_log(LogLevel::Error, format!("Continue failed: {}", e));
+                    self.status_message =
+                        Some((format!("Continue error: {}", e), StatusKind::Error));
+                }
             }
         }
         self.refresh_state();
@@ -307,6 +376,7 @@ impl DashboardApp {
     // ── Scroll helpers ───────────────────────────────────────────────────────
     fn scroll_active_down(&mut self) {
         match self.active_pane {
+            ActivePane::Execution => {}
             ActivePane::CallStack => {
                 let len = self.call_stack_frames.len();
                 if len == 0 {
@@ -336,6 +406,7 @@ impl DashboardApp {
 
     fn scroll_active_up(&mut self) {
         match self.active_pane {
+            ActivePane::Execution => {}
             ActivePane::CallStack => {
                 let sel = self.call_stack_state.selected().unwrap_or(0);
                 self.call_stack_state.select(Some(sel.saturating_sub(1)));
@@ -368,6 +439,10 @@ impl DashboardApp {
 /// or a `DebuggerError` if terminal setup/teardown fails.
 pub fn run_dashboard(engine: DebuggerEngine, function_name: &str) -> Result<()> {
     use crate::DebuggerError;
+
+    if std::env::var_os("SOROBAN_DEBUG_TUI_SMOKE").is_some() {
+        return run_dashboard_smoke(engine, function_name);
+    }
     // Setup terminal
     enable_raw_mode()
         .map_err(|e| DebuggerError::FileError(format!("Failed to enable raw mode: {}", e)))?;
@@ -397,6 +472,23 @@ pub fn run_dashboard(engine: DebuggerEngine, function_name: &str) -> Result<()> 
     if let Err(err) = res {
         tracing::error!("TUI error: {:?}", err);
     }
+
+    Ok(())
+}
+
+fn run_dashboard_smoke(engine: DebuggerEngine, function_name: &str) -> Result<()> {
+    use ratatui::backend::TestBackend;
+
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend)
+        .map_err(|e| DebuggerError::FileError(format!("Failed to create terminal: {}", e)))?;
+
+    let mut app = DashboardApp::new(engine, function_name.to_string());
+    app.do_continue();
+
+    terminal
+        .draw(|f| ui(f, &mut app))
+        .map_err(|e| DebuggerError::FileError(format!("Failed to draw terminal: {}", e)))?;
 
     Ok(())
 }
@@ -446,10 +538,11 @@ fn run_app<B: ratatui::backend::Backend>(
                     KeyCode::BackTab => {
                         app.active_pane = app.active_pane.prev();
                     }
-                    KeyCode::Char('1') => app.active_pane = ActivePane::CallStack,
-                    KeyCode::Char('2') => app.active_pane = ActivePane::Storage,
-                    KeyCode::Char('3') => app.active_pane = ActivePane::Budget,
-                    KeyCode::Char('4') => app.active_pane = ActivePane::Log,
+                    KeyCode::Char('1') => app.active_pane = ActivePane::Execution,
+                    KeyCode::Char('2') => app.active_pane = ActivePane::CallStack,
+                    KeyCode::Char('3') => app.active_pane = ActivePane::Storage,
+                    KeyCode::Char('4') => app.active_pane = ActivePane::Budget,
+                    KeyCode::Char('5') => app.active_pane = ActivePane::Log,
 
                     // ── Scroll ────────────────────────────────────
                     KeyCode::Down | KeyCode::Char('j') => {
@@ -565,7 +658,8 @@ fn render_header(f: &mut Frame, app: &DashboardApp, area: Rect) {
 
 // ─── Body (4 panes) ─────────────────────────────────────────────────────
 fn render_body(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
-    // Split body into left column (top=call stack, bottom=budget) and right column (top=storage, bottom=log)
+    // Split body into left column (top=call stack, bottom=budget) and right column
+    // (top=execution, middle=storage, bottom=log)
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
@@ -578,19 +672,118 @@ fn render_body(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
 
     let right_column = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .constraints([
+            Constraint::Length(7),
+            Constraint::Percentage(45),
+            Constraint::Percentage(55),
+        ])
         .split(columns[1]);
 
     render_call_stack(f, app, left_column[0]);
     render_budget(f, app, left_column[1]);
-    render_storage(f, app, right_column[0]);
-    render_log(f, app, right_column[1]);
+    render_execution(f, app, right_column[0]);
+    render_storage(f, app, right_column[1]);
+    render_log(f, app, right_column[2]);
 }
 
 // ─── Call Stack pane ──────────────────────────────────────────────────────
+fn render_execution(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
+    let is_active = app.active_pane == ActivePane::Execution;
+    let block = pane_block("  Execution", "1", is_active);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let (current_fn, current_args) = app
+        .engine
+        .state()
+        .lock()
+        .ok()
+        .map(|s| {
+            (
+                s.current_function()
+                    .unwrap_or(&app.function_name)
+                    .to_string(),
+                s.current_args().map(str::to_string),
+            )
+        })
+        .unwrap_or_else(|| (app.function_name.clone(), None));
+
+    let status = if app.pending_execution.is_some() {
+        "Staged (press 'c' to run)"
+    } else if app.last_result.is_some() {
+        "Completed"
+    } else if app.last_error.is_some() {
+        "Error"
+    } else {
+        "Idle"
+    };
+
+    let paused = app.engine.is_paused();
+    let arg_text = current_args.as_deref().unwrap_or("(none)");
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("Status: ", Style::default().fg(COLOR_TEXT_DIM)),
+            Span::styled(status, Style::default().fg(COLOR_ACCENT)),
+            Span::styled("  │  ", Style::default().fg(COLOR_BORDER)),
+            Span::styled("Paused: ", Style::default().fg(COLOR_TEXT_DIM)),
+            Span::styled(
+                format!("{}", paused),
+                Style::default().fg(if paused { COLOR_YELLOW } else { COLOR_GREEN }),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Fn: ", Style::default().fg(COLOR_TEXT_DIM)),
+            Span::styled(current_fn, Style::default().fg(COLOR_PURPLE)),
+        ]),
+        Line::from(vec![
+            Span::styled("Args: ", Style::default().fg(COLOR_TEXT_DIM)),
+            Span::styled(arg_text, Style::default().fg(COLOR_TEXT)),
+        ]),
+    ];
+
+    // Show paused file/line if available
+    if paused {
+        if let Some(loc) = app.engine.current_source_location() {
+            let file = loc.file.display();
+            let line = loc.line;
+            let col = loc.column.map(|c| format!(":{}", c)).unwrap_or_default();
+            lines.push(Line::from(vec![
+                Span::styled("Paused at: ", Style::default().fg(COLOR_TEXT_DIM)),
+                Span::styled(
+                    format!("{}:{}{}", file, line, col),
+                    Style::default().fg(COLOR_YELLOW),
+                ),
+            ]));
+        }
+    }
+
+    if let Some(result) = &app.last_result {
+        lines.push(Line::from(vec![
+            Span::styled("Result: ", Style::default().fg(COLOR_TEXT_DIM)),
+            Span::styled(result.clone(), Style::default().fg(COLOR_GREEN)),
+        ]));
+    } else if let Some(err) = &app.last_error {
+        lines.push(Line::from(vec![
+            Span::styled("Error: ", Style::default().fg(COLOR_TEXT_DIM)),
+            Span::styled(err.clone(), Style::default().fg(COLOR_RED)),
+        ]));
+    } else {
+        lines.push(Line::from(vec![Span::styled(
+            "Result: (none yet)",
+            Style::default().fg(COLOR_TEXT_DIM),
+        )]));
+    }
+
+    let exec_widget = Paragraph::new(lines)
+        .style(Style::default().bg(COLOR_SURFACE))
+        .wrap(Wrap { trim: true });
+    f.render_widget(exec_widget, inner);
+}
+
 fn render_call_stack(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
     let is_active = app.active_pane == ActivePane::CallStack;
-    let block = pane_block("  Call Stack", "1", is_active);
+    let block = pane_block("  Call Stack", "2", is_active);
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -664,7 +857,7 @@ fn render_storage(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
     let is_active = app.active_pane == ActivePane::Storage;
     let count = app.storage_entries.len();
     let title = format!("  Storage  ({} entries)", count);
-    let block = pane_block(&title, "2", is_active);
+    let block = pane_block(&title, "3", is_active);
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -735,7 +928,7 @@ fn render_storage(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
 // ─── Budget pane ──────────────────────────────────────────────────────────
 fn render_budget(f: &mut Frame, app: &DashboardApp, area: Rect) {
     let is_active = app.active_pane == ActivePane::Budget;
-    let block = pane_block("  Budget Meters", "3", is_active);
+    let block = pane_block("  Budget Meters", "4", is_active);
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -870,7 +1063,7 @@ fn render_log(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
     let is_active = app.active_pane == ActivePane::Log;
     let count = app.log_entries.len();
     let title = format!("  Execution Log  ({} events)", count);
-    let block = pane_block(&title, "4", is_active);
+    let block = pane_block(&title, "5", is_active);
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -1016,7 +1209,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )]),
         bind("Tab / Shift+Tab", "Cycle panes forward / backward"),
-        bind("1 / 2 / 3 / 4", "Jump directly to pane"),
+        bind("1 / 2 / 3 / 4 / 5", "Jump directly to pane"),
         bind("↑ / k", "Scroll active pane up"),
         bind("↓ / j", "Scroll active pane down"),
         Line::from(""),

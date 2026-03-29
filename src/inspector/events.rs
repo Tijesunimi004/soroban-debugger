@@ -106,6 +106,11 @@ impl EventInspector {
             .collect();
         serde_json::Value::Array(arr)
     }
+
+    /// Return the events emitted since the previous snapshot length.
+    pub fn events_since(events: &[ContractEvent], previous_len: usize) -> Vec<ContractEvent> {
+        events.iter().skip(previous_len).cloned().collect()
+    }
 }
 
 #[cfg(test)]
@@ -141,5 +146,25 @@ mod tests {
 
         let filtered = EventInspector::filter_events(&events, "nonexistent");
         assert_eq!(filtered.len(), 0);
+    }
+
+    #[test]
+    fn test_events_since_returns_delta() {
+        let events = vec![
+            ContractEvent {
+                contract_id: None,
+                topics: vec!["topic1".to_string()],
+                data: "data1".to_string(),
+            },
+            ContractEvent {
+                contract_id: None,
+                topics: vec!["topic2".to_string()],
+                data: "data2".to_string(),
+            },
+        ];
+
+        let delta = EventInspector::events_since(&events, 1);
+        assert_eq!(delta.len(), 1);
+        assert_eq!(delta[0].data, "data2");
     }
 }
