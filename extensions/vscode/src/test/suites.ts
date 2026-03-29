@@ -1,18 +1,18 @@
 import * as assert from "assert";
-import { ChildProcess, spawn } from "child_process";
+import { spawn } from "child_process";
 import * as fs from "fs";
 import * as net from "net";
 import * as path from "path";
 import {
   DebuggerProcess,
+  DebuggerTimeoutError,
+  formatProtocolMismatchMessage,
   getDebuggerVersionInfo,
   validateLaunchConfig,
-  formatProtocolMismatchMessage,
-  DebuggerTimeoutError
-} from '../cli/debuggerProcess';
-import { resolveSourceBreakpoints } from '../dap/sourceBreakpoints';
-import { VariableStore } from '../dap/variableStore';
-import { DapClient } from './dapClient';
+} from "../cli/debuggerProcess";
+import { resolveSourceBreakpoints } from "../dap/sourceBreakpoints";
+import { VariableStore } from "../dap/variableStore";
+import { DapClient } from "./dapClient";
 
 type DebugMessage = {
   id: number;
@@ -78,17 +78,17 @@ async function startMockDebuggerServer(options: {
               selected_version: 1,
             });
             break;
-          case 'Authenticate':
-            respond({ type: 'Authenticated', success: true, message: 'ok' });
+          case "Authenticate":
+            respond({ type: "Authenticated", success: true, message: "ok" });
             break;
           case "LoadSnapshot":
             respond({ type: "SnapshotLoaded", summary: "ok" });
             break;
-          case 'LoadContract':
-            respond({ type: 'ContractLoaded', size: 0 });
+          case "LoadContract":
+            respond({ type: "ContractLoaded", size: 0 });
             break;
-          case 'Ping':
-            respond({ type: 'Pong' });
+          case "Ping":
+            respond({ type: "Pong" });
             break;
           case "Evaluate":
             respond(
@@ -166,11 +166,31 @@ async function wait(ms: number): Promise<void> {
 
 function resolveFixtures(): TestFixtures {
   const extensionRoot = process.cwd();
-  const repoRoot = path.resolve(extensionRoot, '..', '..');
-  const contractPath = path.join(repoRoot, 'tests', 'fixtures', 'wasm', 'echo.wasm');
-  const sourcePath = path.join(repoRoot, 'tests', 'fixtures', 'contracts', 'echo', 'src', 'lib.rs');
-  const binaryPath = process.env.SOROBAN_DEBUG_BIN
-    || path.join(repoRoot, 'target', 'debug', process.platform === 'win32' ? 'soroban-debug.exe' : 'soroban-debug');
+  const repoRoot = path.resolve(extensionRoot, "..", "..");
+  const contractPath = path.join(
+    repoRoot,
+    "tests",
+    "fixtures",
+    "wasm",
+    "echo.wasm",
+  );
+  const sourcePath = path.join(
+    repoRoot,
+    "tests",
+    "fixtures",
+    "contracts",
+    "echo",
+    "src",
+    "lib.rs",
+  );
+  const binaryPath =
+    process.env.SOROBAN_DEBUG_BIN ||
+    path.join(
+      repoRoot,
+      "target",
+      "debug",
+      process.platform === "win32" ? "soroban-debug.exe" : "soroban-debug",
+    );
 
   return {
     extensionRoot,
@@ -318,7 +338,10 @@ export async function runSmokeSuite(): Promise<void> {
       signal: controller.signal,
     });
     setTimeout(() => controller.abort(), 10);
-    await assert.rejects(evaluatePromise, (error: any) => error?.name === 'AbortError');
+    await assert.rejects(
+      evaluatePromise,
+      (error: any) => error?.name === "AbortError",
+    );
 
     await wait(250);
     assert.equal(
@@ -327,7 +350,9 @@ export async function runSmokeSuite(): Promise<void> {
     );
     await debuggerProcess.ping();
 
-    const timedOut = debuggerProcess.evaluate('2', undefined, { timeoutMs: 20 });
+    const timedOut = debuggerProcess.evaluate("2", undefined, {
+      timeoutMs: 20,
+    });
     await assert.rejects(
       timedOut,
       (error: any) => error instanceof DebuggerTimeoutError,
@@ -535,6 +560,37 @@ export async function runSmokeSuite(): Promise<void> {
     true,
     "Expected heuristic mapping to still set a function breakpoint",
   );
+
+  // Test HEURISTIC_NO_FUNCTION behavior for lines outside any function
+  const noFunctionBreakpoints = resolveSourceBreakpoints(
+    fixtures.sourcePath,
+    [1, 2, 13], // Lines outside any function in lib.rs
+    exportedFunctions,
+  );
+
+  for (let i = 0; i < noFunctionBreakpoints.length; i++) {
+    const bp = noFunctionBreakpoints[i];
+    assert.equal(
+      bp.verified,
+      false,
+      `Expected line ${bp.requestedLine} to be unverified`,
+    );
+    assert.equal(
+      bp.reasonCode,
+      "HEURISTIC_NO_FUNCTION",
+      `Expected line ${bp.requestedLine} to have HEURISTIC_NO_FUNCTION reason code`,
+    );
+    assert.equal(
+      bp.setBreakpoint,
+      false,
+      `Expected line ${bp.requestedLine} to not set runtime breakpoint`,
+    );
+    assert.equal(
+      bp.message,
+      "Line is not inside a detectable Rust function",
+      `Expected line ${bp.requestedLine} to have clear diagnostic message`,
+    );
+  }
 
   await debuggerProcess.setBreakpoint({
     id: "echo",
